@@ -1,0 +1,144 @@
+{% extends "base.html" %} {% block title %}Add Composition{% endblock %} {%
+block content %}
+<head>
+  <!-- Link to the stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+  <title>Music Index</title>
+</head>
+
+<!-- Second Navbar -->
+<div class="navbar-main">
+  <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
+  <a class="nav-item nav-link" id="scales" href="/scales">Scale Calculator</a>
+  <a class="nav-item nav-link" id="composer" href="/composer">Automated Composer</a>
+</div>
+
+  <div class="navbar-two">
+    <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
+    <a class="nav-item nav-link" id="add" href="/index/add">Add Composition</a>
+  </div>
+<h1 align="center">Add Composition</h1>
+
+<!-- URL Submission Form -->
+<form method="POST" action="{{ url_for('routes.addComposition') }}">
+  <h3 align="center">Enter URL to Add Composition</h3>
+  <div class="form-group">
+    <label for="url">Composition URL</label>
+    <input
+      type="text"
+      class="form-control"
+      id="url"
+      name="url"
+      placeholder="Enter URL of composition"
+      value="{{ url or '' }}"
+      required
+    />
+  </div>
+  <br />
+  <button type="submit" class="btn btn-primary" style="margin: 10px;">Submit URL</button>
+</form>
+
+<!-- Confirmation Section -->
+{% if composer and composition %}
+<hr />
+<h3 align="center">Confirm Composition Details</h3>
+<form method="POST" action="{{ url_for('routes.confirmComposition') }}">
+  <div class="form-group">
+    <label for="composer-select">Composer</label>
+    <select
+      class="form-control"
+      id="composer-select"
+      name="composer"
+      onchange="updateComposerInput()"
+    >
+      <option value="" disabled selected>
+        Select an existing composer or add a new one
+      </option>
+      {% for existing_composer in composers %}
+      <option value="{{ existing_composer.name }}">
+        {{ existing_composer.name }}
+      </option>
+      {% endfor %}
+      <option value="">Add New Composer</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label for="composer">Composer</label>
+    <input
+      type="text"
+      class="form-control"
+      id="composer"
+      name="composer_name"
+      value="{{ composer }}"
+      required
+    />
+  </div>
+  <div class="form-group">
+    <label for="composerLifetime">Composer Lifetime (Optional, ex: 1700 - 1788)</label>
+    <input
+      type="text"
+      class="form-control"
+      id="composerLifetime"
+      name="composerLifetime"
+      value="{{ composerLifetime or '' }}"
+    />
+  </div>
+  <div class="form-group">
+    <label for="composition">Composition</label>
+    <input
+      type="text"
+      class="form-control"
+      id="composition"
+      name="composition"
+      value="{{ composition }}"
+      required
+    />
+  </div>
+
+  <div class="form-group">
+    <label for="compositionYear"
+      >Year(s) Composed (Optional, ex: 1717 - 1723)</label>
+    <input
+      type="text"
+      class="form-control"
+      id="compositionYear"
+      name="compositionYear"
+      value="{{ compositionYear or '' }}"
+    />
+  </div>
+
+  <div class="form-group">
+    <label for="url">URL</label>
+    <input
+      type="text"
+      class="form-control"
+      id="url"
+      name="url"
+      value="{{ url }}"
+      readonly
+    />
+  </div>
+  <br />
+  <button type="submit" class="btn btn-success" style="margin: 10px;">Confirm</button>
+</form>
+
+<script>
+  function updateComposerInput() {
+    const composerSelect = document.getElementById("composer-select");
+    const composerInput = document.getElementById("composer");
+    const composerLifetimeInput = document.getElementById("composerLifetime");
+
+    if (composerSelect.value) {
+      composerInput.value = composerSelect.value; 
+      composerInput.setAttribute("readonly", true); 
+      composerLifetimeInput.setAttribute("readonly", true);
+    } else {
+      composerInput.removeAttribute("readonly"); 
+      composerInput.value = ""; 
+      composerLifetimeInput.removeAttribute("readonly"); 
+      composerLifetimeInput.value = ""; 
+    }
+  }
+</script>
+{% endif %} {% endblock %}

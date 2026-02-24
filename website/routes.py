@@ -5,7 +5,7 @@ from flask_login import  current_user
 
 import httpx
 from bs4 import BeautifulSoup
-
+import yt_dlp
 
 routes = Blueprint('routes', __name__)
 
@@ -62,22 +62,35 @@ def addComposition():
     if request.method == 'POST':
         url = request.form.get('url')
         print(f"Received URL: {url}")
+
         if url:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            }
             try:
-                resp = httpx.get(url, headers=headers)
-                resp.raise_for_status()
-                html = BeautifulSoup(resp.text, "html.parser")
-                videoTitle = html.title.text[:-10] if html.title else "Unknown Title"
+                ydl_opts = {
+                    "quiet": True,
+                    "skip_download": True,
+                }
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    videoTitle = info.get("title", "Unknown Title")
+
+                print(f"Video title: {videoTitle}")
+
                 composer, composition = infoFinder(videoTitle)
-                print(f"Scraped Composer: {composer}, Composition: {composition}")
+                print(f"Parsed Composer: {composer}, Composition: {composition}")
+
             except Exception as e:
-                flash(f"Error scraping URL: {e}", category="error")
+                flash(f"Error retrieving video info: {e}", category="error")
 
     composers = Composer.query.order_by(Composer.name).all()
-    return render_template("add.html", composer=composer, composition=composition, url=url, composers=composers, user=current_user)
+    return render_template(
+        "add.html",
+        composer=composer,
+        composition=composition,
+        url=url,
+        composers=composers,
+        user=current_user
+    )
 
 
 

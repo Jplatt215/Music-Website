@@ -4,8 +4,7 @@ from . import db
 from flask_login import  current_user
 
 import httpx
-from selectolax.parser import HTMLParser
-
+from bs4 import BeautifulSoup
 
 
 routes = Blueprint('routes', __name__)
@@ -70,8 +69,8 @@ def addComposition():
             try:
                 resp = httpx.get(url, headers=headers)
                 resp.raise_for_status()
-                html = HTMLParser(resp.text)
-                videoTitle = html.css_first("title").text()[:-10]
+                html = BeautifulSoup(resp.text, "html.parser")
+                videoTitle = html.title.text[:-10] if html.title else "Unknown Title"
                 composer, composition = infoFinder(videoTitle)
                 print(f"Scraped Composer: {composer}, Composition: {composition}")
             except Exception as e:

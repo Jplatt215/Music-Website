@@ -2,7 +2,7 @@
 A web-based tool for generating, modifying, and playing polyphonic music phrases. Built with Flask, VexFlow, and Tone.js, this project demonstrates real-time music notation rendering and automated composition features.
 
 ## Deployed at
-[jplatt215musicwebsite.up.railway.app](https://jplatt215musicwebsite.up.railway.app)
+[https://music-website-rknm.onrender.com/composer](https://music-website-rknm.onrender.com/composer)
 
 ## Features
 * Generate musical phrases programmatically.

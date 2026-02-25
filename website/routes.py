@@ -4,7 +4,6 @@ from . import db
 from flask_login import  current_user
 
 import httpx
-from bs4 import BeautifulSoup
 import yt_dlp
 
 routes = Blueprint('routes', __name__)

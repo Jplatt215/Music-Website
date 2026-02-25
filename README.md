@@ -4,6 +4,8 @@ A web-based tool for generating, modifying, and playing polyphonic music phrases
 ## Deployed at
 [https://music-website-rknm.onrender.com/composer](https://music-website-rknm.onrender.com/composer)
 
+(Because this project is hosted on Render's free tier, the server may spin down when idle. The first request after a period of inactivity can take longer to respond as the server starts up. Subsequent requests should be faster.)
+
 ## Features
 * Generate musical phrases programmatically.
 * Modify phrases: reverse, reflect, shift, transpose, shuffle rhythm/pitch, simplify/complicate.

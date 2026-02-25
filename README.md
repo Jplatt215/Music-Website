@@ -16,3 +16,6 @@ A web-based tool for generating, modifying, and playing polyphonic music phrases
 * Music Rendering: VexFlow
 * Audio Playback: Tone.js
 * Backend: Python, Flask
+
+## Notes
+* This application uses yt-dlp to extract YouTube video titles for composer and composition parsing on the "Index" page. On cloud platforms (e.g., Render) yt-dlp may sometimes fail with an error like: "Sign in to confirm you’re not a bot". This limitation does not occur when running the project locally.

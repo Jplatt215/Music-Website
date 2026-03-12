@@ -84,18 +84,17 @@ let measureLength = timeSignature[0] * (1 / timeSignature[1]);
 let numMeasures = 1;
 let mode = "Standard";
 
-class part {
+class Part {
   constructor(name, pitchRange = ["E3", "E6"], rhythmRange = [0.03125, 1], scale = ["C", "Chromatic"]) {
     Object.assign(this, { name, pitchRange, rhythmRange, scale, unprocessedNotes: [], notes: [], ties: [], tuplets: [], toneNotes: [], memory: [], currentMemoryIndex: -1, muted: false, duration: 0 });
   }
 }
 
-// Example: different pitch ranges per voice
-const upperVoice = new part("upperVoice", ["C4", "C6"]);
-const middleVoice = new part("middleVoice", ["A3", "F5"]);
-const lowerVoice = new part("lowerVoice", ["E2", "C4"]);
-const voice4 = new part("voice4", ["D3", "B5"]);
-const harmonyVoice = new part("harmonyVoice"); // uses default
+const upperVoice = new Part("upperVoice", ["C4", "C6"]);
+const middleVoice = new Part("middleVoice", ["A3", "F5"]);
+const lowerVoice = new Part("lowerVoice", ["E2", "C4"]);
+const voice4 = new Part("voice4", ["D3", "B5"]);
+const harmonyVoice = new Part("harmonyVoice"); // uses default
 const voicesMap = { upperVoice, middleVoice, lowerVoice, voice4, harmonyVoice };
 
 let clipboard = { unprocessedNotes: [], notes: [], ties: [], tuplets: [], toneNotes: [] };
@@ -567,7 +566,10 @@ bindVoiceAction(generatePhraseButton, part => {
   drawNotes(part);
 });
 
-bindVoiceAction(separateVoiceButton, separateVoice);
+separateVoiceButton?.addEventListener("click", () => {
+  separateVoice();
+  updateMemory();
+});
 bindVoiceAction(reverseButton, reverseVoice);
 bindVoiceAction(copyPartButton, copyPart);
 bindVoiceAction(pastePartButton, pastePart);
@@ -1094,6 +1096,8 @@ function generatePhrase(part, duration, allowTuplets = true){
   let tupletNotes = [];
   const durationKeys = Object.keys(durationMapping);
   const allowedDurations = [];
+
+  //only use rhythms within rhythm-range of voice
   for (let durationKey of durationKeys){
     if (durationMapping[durationKey] >= part.rhythmRange[0] && durationMapping[durationKey] <= part.rhythmRange[1]){
       allowedDurations.push(durationKey);
@@ -1101,6 +1105,7 @@ function generatePhrase(part, duration, allowTuplets = true){
   }
 
   while (currentDuration < duration) {
+    //reset phrase if unable to finish
     if (duration - currentDuration < part.rhythmRange[0]){
       currentDuration = 0;
       notes = [];
@@ -1108,12 +1113,15 @@ function generatePhrase(part, duration, allowTuplets = true){
       totalDuration = totalDurationOriginal;
     }
 
+    //random duration
     let durationStr = allowedDurations[Math.floor(Math.random() * allowedDurations.length)];
 
+    //skip if duration overflows
     if (currentDuration + durationMapping[durationStr] > duration) {
       continue; 
     }
 
+    //tuplet creation
     if (allowTuplets && !durationStr.includes("d") && durationMapping[durationStr] < 1 && ((Math.random() < 0.5) && durationMapping[durationStr] >= 1 / timeSignature[1] && duration - currentDuration >= 2 * durationMapping[durationStr])){
       let notesOccupied = 2;
       let possibleTupletSizes = [3, 5, 7];
@@ -1157,78 +1165,126 @@ function generateMelody(part, duration){
 //  Accompany   /////////////////////////
 
 function separateVoice() {
-  // Use the first selected voice as the source
-  let voiceToSeparate = selectedVoices[0]; 
+
+  let voiceToSeparate = selectedVoices[0];
   if (!voiceToSeparate || !voiceToSeparate.unprocessedNotes?.length) {
     return;
   }
 
-  // Buckets for notes and tuplets
+  // Storage buckets aligned with `voices`
   let newNotesPerVoice = voices.map(() => []);
   let newTupletsPerVoice = voices.map(() => []);
   let newTupletNotesPerVoice = voices.map(() => []);
 
-  // Build allowed pitches 
-  let allowedPitchesMap = new Map();
-  for (let vName of voices) {
-    const voiceObj = voicesMap[vName];
-    allowedPitchesMap.set(vName, getAllowedPitches(voiceObj));
-  }
+  // Track duration for harmony-mode pitch filtering
+  let separationDuration = 0;
+  totalDuration = 0;
 
-  // Distribute notes
   for (let noteObj of voiceToSeparate.unprocessedNotes) {
-    let rawName = noteObj.keys[0];
-    let noteName = rawName.replace("/", ""); 
+    console.log("*****************************");
+    console.log(noteObj.keys[0], typeof noteObj.isRest, noteObj.isRest());
+    
 
-    // Find candidate voices by name
+    // ---- Extract pitch safely ----
+    let rawKey = noteObj.keys[0];              // e.g. "Bb/4"
+    let pitchNoSlash = rawKey.replace("/", ""); // "Bb4"
+    let [noteName, noteOctaveStr] = rawKey.split("/");
+    let noteOctave = parseInt(noteOctaveStr);
+
+    console.log("pitchNoSlash", pitchNoSlash);
+    console.log("noteName", noteName);
+
+    let noteDurationValue = getNoteDuration(noteObj);
+    let noteDurationStr = getDurationString(noteObj);
+
+    // ---- Compute allowed pitches per note ----
     let candidateVoices = voices.filter(vName => {
-      const selVoice = selectedVoices.find(sel => sel.name === vName);
-      return selVoice && allowedPitchesMap.get(vName).includes(noteName);
+
+      const sel = selectedVoices.find(s => s.name === vName);
+      if (!sel) return false;
+
+      const allowedPitches = getAllowedPitches(
+        voicesMap[vName],
+        noteDurationValue
+      );
+
+      //console.log("allowedPitches.includes(pitchNoSlash)", allowedPitches.includes(pitchNoSlash));
+      return allowedPitches.includes(pitchNoSlash);
     });
 
-    // Pick a target voice randomly, or fallback to source
-    let targetVoiceName = candidateVoices.length > 0
-      ? candidateVoices[Math.floor(Math.random() * candidateVoices.length)]
-      : voiceToSeparate.name;
+    // ---- Choose target voice ----
+    let targetVoiceName = null;
+    if (candidateVoices.length > 0){
+      targetVoiceName = candidateVoices[Math.floor(Math.random() * candidateVoices.length)]
+    }
+    else{
+      targetVoiceName = voiceToSeparate.name;
+    }
+
+    console.log("targetVoiceName", targetVoiceName);
 
     let targetIdx = voices.indexOf(targetVoiceName);
 
     let originalTuplet = findTuplet(noteObj, voiceToSeparate);
 
+    // ---- Distribute across all voices ----
     voices.forEach((vName, i) => {
-      let noteToAdd = i === targetIdx ? noteObj : createNote(["Rest"], 4, getDurationString(noteObj));
+      let noteToAdd = null;
+      console.log("----------------------------");
+      console.log("vName", vName);
+      console.log("targetVoiceName", targetVoiceName);
+      console.log("targetIdx", targetIdx);
+      console.log("i", i);
+      console.log("i === targetIdx", i === targetIdx);
+      console.log("noteObj.isRest() !== true", noteObj.isRest() !== true);
+
+      if (i === targetIdx && (noteObj.isRest() !== true)) {
+        console.log("creating note", noteName, noteOctave);
+        noteToAdd = createNote([noteName], noteOctave, noteDurationStr);
+        let newRawKey = noteToAdd.keys[0];    
+        console.log("newRawKey", newRawKey);
+      } 
+      else {
+        console.log("creating rest");
+        noteToAdd = createNote(["Rest"], 4, noteDurationStr);
+      }
 
       newNotesPerVoice[i].push(noteToAdd);
 
+      // ---- Preserve tuplets ----
       if (originalTuplet) {
+
         newTupletNotesPerVoice[i].push(noteToAdd);
 
         if (newTupletNotesPerVoice[i].length === originalTuplet.tupletInfo[0]) {
+
           newTupletsPerVoice[i].push({
             tupletNotes: newTupletNotesPerVoice[i],
             tupletInfo: [...originalTuplet.tupletInfo],
             realDuration: originalTuplet.realDuration
           });
+
           newTupletNotesPerVoice[i] = [];
         }
       }
     });
+
+    // ---- Advance duration for harmony mode ----
+    separationDuration += noteDurationValue;
+    totalDuration = separationDuration;
   }
 
-  // Reset & redraw only selected voices
+  // ---- Rebuild selected voices ----
   voices.forEach((vName, i) => {
+
     const selVoice = selectedVoices.find(sel => sel.name === vName);
-    if (!selVoice) return; 
+    if (!selVoice) return;
 
     resetPart(selVoice);
 
-    for (let tuplet of newTupletsPerVoice[i]) {
-      selVoice.tuplets.push(tuplet);
-    }
+    newTupletsPerVoice[i].forEach(t => selVoice.tuplets.push(t));
 
-    for (let note of newNotesPerVoice[i]) {
-      addNote(selVoice, note);
-    }
+    newNotesPerVoice[i].forEach(n => addNote(selVoice, n));
 
     drawNotes(selVoice);
   });

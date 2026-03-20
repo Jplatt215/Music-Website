@@ -90,6 +90,20 @@ class Part {
   }
 }
 
+class UnprocessedNote {
+  constructor(noteName, octave, duration, dotted = false) {
+    this.noteName = Array.isArray(noteName) ? noteName : [noteName];
+    this.octave = octave;
+    this.duration = duration;
+    this.dotted = dotted;
+    this.isRest = this.noteName[0] === "Rest";  // check first element
+  }
+
+  toStaveNote() {
+    return createNote(this.noteName, this.octave, this.dotted ? this.duration + "d" : this.duration);  // pass array directly, no extra []
+  }
+}
+
 const upperVoice = new Part("upperVoice", ["C4", "C6"]);
 const middleVoice = new Part("middleVoice", ["A3", "F5"]);
 const lowerVoice = new Part("lowerVoice", ["E2", "C4"]);
@@ -601,7 +615,7 @@ randomHarmonyButton?.addEventListener("click", generateHarmony);
 //  Get functions /////////////////////////
 
 function getNoteDuration(note) {
-  let dur = note.getDuration();
+  let dur = note.duration;
   if (note.dotted){
     dur = dur + "d";
   }
@@ -685,7 +699,7 @@ function getNoteDurationInSeconds(voice, note) { // Approximate seconds per note
 }
 
 function checkNoteInScale(note, voice) {
-    if (note.isRest()) return true;
+    if (note.isRest) return true;
 
     const scaleRoot = voice.scale[0];    
     const scaleIntervals = scalesMapping[voice.scale[1]];  
@@ -695,7 +709,7 @@ function checkNoteInScale(note, voice) {
         return Object.keys(noteMapping).find(key => noteMapping[key] === semitone);
     });
 
-    const [noteName] = note.getKeys()[0].split("/");
+    const noteName = note.notename;
 
     return scaleNotes.includes(noteName);
 }
@@ -807,9 +821,11 @@ function fillDuration(fillNoteDuration, note) {
   return fillNotes;
 }
 
-function addNote(part, note) { 
-  part.unprocessedNotes.push(note);  
+function addNote(part, unprocessedNote) { 
+  part.unprocessedNotes.push(unprocessedNote);  
+  let note = unprocessedNote.toStaveNote();
   let tupletObj = findTuplet(note, part);
+  
   if (tupletObj != null){
     if (tupletObj.tupletNotes[tupletObj.tupletNotes.length - 1] == note){
       part.duration += tupletObj.realDuration;
@@ -1131,8 +1147,7 @@ function generatePhrase(part, duration, allowTuplets = true){
 
       while(tupletNotes.length < numTupletNotes){
         let [noteName, noteOctave] = randomPitchFromScale(part, durationMapping[durationStr]);
-        let note = createNote([noteName], noteOctave, getDurationKeyFromValue(durationMapping[durationStr]));
-        tupletNotes.push(note);
+        tupletNotes.push(new UnprocessedNote(noteName, noteOctave, durationStr));
         totalDuration += durationMapping[durationStr] * 2 / numTupletNotes;
       }
 
@@ -1149,8 +1164,7 @@ function generatePhrase(part, duration, allowTuplets = true){
     
     else{
       let [noteName, noteOctave] = randomPitchFromScale(part, durationMapping[durationStr]);
-      let note = createNote([noteName], noteOctave, durationStr);
-      notes.push(note);
+      notes.push(new UnprocessedNote(noteName, noteOctave, durationStr));
       currentDuration += durationMapping[durationStr];
       totalDuration += durationMapping[durationStr];
     }
@@ -1165,7 +1179,6 @@ function generateMelody(part, duration){
 //  Accompany   /////////////////////////
 
 function separateVoice() {
-
   let voiceToSeparate = selectedVoices[0];
   if (!voiceToSeparate || !voiceToSeparate.unprocessedNotes?.length) {
     return;
@@ -1181,21 +1194,12 @@ function separateVoice() {
   totalDuration = 0;
 
   for (let noteObj of voiceToSeparate.unprocessedNotes) {
-    console.log("*****************************");
-    console.log(noteObj.keys[0], typeof noteObj.isRest, noteObj.isRest());
-    
+        // ---- Extract pitch safely ----
+    let noteName = noteObj.noteName;              // e.g. "Bb/4"
+    let noteOctave = noteObj.octave;
 
-    // ---- Extract pitch safely ----
-    let rawKey = noteObj.keys[0];              // e.g. "Bb/4"
-    let pitchNoSlash = rawKey.replace("/", ""); // "Bb4"
-    let [noteName, noteOctaveStr] = rawKey.split("/");
-    let noteOctave = parseInt(noteOctaveStr);
-
-    console.log("pitchNoSlash", pitchNoSlash);
-    console.log("noteName", noteName);
-
-    let noteDurationValue = getNoteDuration(noteObj);
-    let noteDurationStr = getDurationString(noteObj);
+    let noteDuration = noteObj.duration;
+    console.log("noteDuration", noteDuration);
 
     // ---- Compute allowed pitches per note ----
     let candidateVoices = voices.filter(vName => {
@@ -1205,11 +1209,10 @@ function separateVoice() {
 
       const allowedPitches = getAllowedPitches(
         voicesMap[vName],
-        noteDurationValue
+        noteDuration
       );
 
-      //console.log("allowedPitches.includes(pitchNoSlash)", allowedPitches.includes(pitchNoSlash));
-      return allowedPitches.includes(pitchNoSlash);
+      return allowedPitches.includes(noteName + noteOctave);
     });
 
     // ---- Choose target voice ----
@@ -1221,32 +1224,18 @@ function separateVoice() {
       targetVoiceName = voiceToSeparate.name;
     }
 
-    console.log("targetVoiceName", targetVoiceName);
-
     let targetIdx = voices.indexOf(targetVoiceName);
-
     let originalTuplet = findTuplet(noteObj, voiceToSeparate);
 
     // ---- Distribute across all voices ----
     voices.forEach((vName, i) => {
-      let noteToAdd = null;
-      console.log("----------------------------");
-      console.log("vName", vName);
-      console.log("targetVoiceName", targetVoiceName);
-      console.log("targetIdx", targetIdx);
-      console.log("i", i);
-      console.log("i === targetIdx", i === targetIdx);
-      console.log("noteObj.isRest() !== true", noteObj.isRest() !== true);
 
-      if (i === targetIdx && (noteObj.isRest() !== true)) {
-        console.log("creating note", noteName, noteOctave);
-        noteToAdd = createNote([noteName], noteOctave, noteDurationStr);
-        let newRawKey = noteToAdd.keys[0];    
-        console.log("newRawKey", newRawKey);
+      if (i === targetIdx && (noteObj.isRest !== true)) {
+        noteToAdd = new UnprocessedNote(noteName, noteOctave, noteDuration);
+        let newRawKey = noteToAdd.noteName;    
       } 
       else {
-        console.log("creating rest");
-        noteToAdd = createNote(["Rest"], 4, noteDurationStr);
+        noteToAdd = new UnprocessedNote(["Rest"], 4, noteDuration);
       }
 
       newNotesPerVoice[i].push(noteToAdd);
@@ -1270,7 +1259,7 @@ function separateVoice() {
     });
 
     // ---- Advance duration for harmony mode ----
-    separationDuration += noteDurationValue;
+    separationDuration += noteDuration;
     totalDuration = separationDuration;
   }
 
@@ -1340,8 +1329,9 @@ function reflectVoice(voice, axisPitch) {
   let axisScalarIndex = scale.indexOf(axisDistanceFromRoot); 
 
   for (let note of voice.unprocessedNotes) {
-    let [noteName, noteOctave] = note.getKeys()[0].split("/");
-    if (note.isRest()) {
+    let noteName = note.noteName
+    let noteOctave = note.octave
+    if (note.isRest) {
       reflectedNote = note;
     }
     else{
@@ -1388,7 +1378,7 @@ function reflectVoice(voice, axisPitch) {
         noteOctave -= Math.ceil((noteIdx - maxIdx) / 12);
       }
 
-      reflectedNote = createNote([reflectedPitch], noteOctave, getDurationString(note));
+      reflectedNote = new UnprocessedNote(reflectedPitch, noteOctave, getDurationString(note));
     }
     reflectedNotes.push(reflectedNote);
 
@@ -1424,7 +1414,6 @@ function shiftVoice(voice, distance) {
   let notes = voice.unprocessedNotes;
   let tuplets = [];
   let tupletNotes = [];
-  let seenTuplets = new Set();
 
   for (let note of voice.unprocessedNotes){
     let originalTuplet = findTuplet(note, voice);
@@ -1447,7 +1436,7 @@ function shiftVoice(voice, distance) {
     voice.tuplets.push(tuplet);
   }
 
-  addNote(voice, createNote(['Rest'], 4, distance));
+  addNote(voice, new UnprocessedNote(['Rest'], 4, distance));
   
   for (let note of notes){
     addNote(voice, note);
@@ -1473,11 +1462,12 @@ function transposeVoice(voice, scaleDegreeDifference) {
   
 
   for (let note of voice.unprocessedNotes){
-    if (note.isRest()) {
+    if (note.isRest) {
       transposedNote = note;
     }
     else{
-      const [noteName, noteOctave] = note.getKeys()[0].split("/");
+      const noteName = note.noteName
+      const noteOctave = note.octave;
       const noteIndex = noteMapping[noteName];
       let originalInterval = (noteIndex + 12 - rootIndex) % 12;
       let originalScaleDegree = scale.indexOf(originalInterval);
@@ -1509,8 +1499,7 @@ function transposeVoice(voice, scaleDegreeDifference) {
       else if (noteIdx > maxIdx) {
         newOctave -= Math.ceil((noteIdx - maxIdx) / 12);
       }
-
-      transposedNote = createNote([transposedPitch], newOctave, getDurationString(note));
+      transposedNote = new UnprocessedNote(transposedPitch, newOctave, getDurationString(note));
     }
 
     transposedNotes.push(transposedNote);
@@ -1534,7 +1523,7 @@ function transposeVoice(voice, scaleDegreeDifference) {
   for (let tuplet of tuplets) {
     voice.tuplets.push(tuplet);
   }
-  
+
   for (let note of transposedNotes){
     addNote(voice, note);
   }
@@ -1553,12 +1542,13 @@ function shuffleRhythm(voice) {
 
   while (newNotes.length < voice.unprocessedNotes.length){
     let pitchNote = pitchNotes[i];
-    if (pitchNote.isRest()){
-      noteName = "Rest";
+    if (pitchNote.isRest){
+      noteName = ["Rest"];
       noteOctave = 4;
     }
     else{
-      [noteName, noteOctave] = pitchNote.getKeys()[0].split("/");
+      noteName = pitchNote.noteName;
+      noteOctave = pitchNote.octave;
     }
 
     j = Math.floor(Math.random() * rhythmNotes.length);
@@ -1568,7 +1558,7 @@ function shuffleRhythm(voice) {
     currentTuplet = findTuplet(rhythmNote, voice);
 
     if (currentTuplet){
-      let newNote = createNote([noteName], noteOctave, getDurationString(rhythmNote));
+      let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
       newNotes.push(newNote);
       currentTupletNotes.push(newNote);
       rhythmNotes.splice(j, 1);
@@ -1587,9 +1577,10 @@ function shuffleRhythm(voice) {
             noteOctave = 4;
           }
           else{
-            [noteName, noteOctave] = pitchNote.getKeys()[0].split("/");
+            noteName = pitchNote.noteName;
+            noteOctave = pitchNote.octave;
           }
-          let newNote = createNote([noteName], noteOctave, getDurationString(rhythmNote));
+          let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
           newNotes.push(newNote);
           currentTupletNotes.push(newNote);
           rhythmNotes.splice(j, 1);
@@ -1603,7 +1594,7 @@ function shuffleRhythm(voice) {
       currentTupletNotes = [];
     }
     else{
-      let newNote = createNote([noteName], noteOctave, getDurationString(rhythmNote));
+      let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
       newNotes.push(newNote);
       rhythmNotes.splice(j, 1);
       }
@@ -1682,7 +1673,7 @@ function shufflePitch(voice) {
   let pitchNotes = [...voice.unprocessedNotes];
 
   // Extract just the pitches (ignore rests here)
-  pitchNotes = pitchNotes.filter(n => !n.isRest());
+  pitchNotes = pitchNotes.filter(n => !n.isRest);
 
   // Shuffle pitches
   for (let i = pitchNotes.length - 1; i > 0; i--) {
@@ -1698,17 +1689,18 @@ function shufflePitch(voice) {
   for (let rhythmNote of rhythmNotes) {
     let noteName, noteOctave;
 
-    if (rhythmNote.isRest()) {
+    if (rhythmNote.isRest) {
       // Keep it a rest, don't advance pitchIndex
-      noteName = "Rest";
+      noteName = ["Rest"];
       noteOctave = 4;
     } else {
       // Take the next available pitch
       let pitchNote = pitchNotes[pitchIndex++];
-      [noteName, noteOctave] = pitchNote.getKeys()[0].split("/");
+      noteName = pitchNote.noteName;
+      noteOctave = pitchNote.octave;
     }
 
-    let newNote = createNote([noteName], noteOctave, getDurationString(rhythmNote));
+    let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
     newNotes.push(newNote);
 
     let originalTuplet = findTuplet(rhythmNote, voice);
@@ -1746,11 +1738,12 @@ function changeRhythm(voice) {
 
   while (originalNotes.length != 0){
     let note = originalNotes.shift()
-    const [noteName, noteOctave] = note.getKeys()[0].split("/");
+    const noteName = note.noteName;
+    const noteOctave = note.octave;
     let durationStr = durationKeys[Math.floor(Math.random() * durationKeys.length)];
 
     currentDuration += durationMapping[durationStr];
-    newNotes.push(createNote([noteName], noteOctave, durationStr));
+    newNotes.push(new UnprocessedNote(noteName, noteOctave, durationStr));
     }
 
     resetPart(voice);
@@ -1770,13 +1763,13 @@ function changePitch(voice) {
   totalDuration = 0;
 
   for (let rhythmNote of rhythmNotes){
-    if(rhythmNote.isRest()){
-      newNote = createNote(["Rest"], 4, getDurationString(rhythmNote));;
+    if(rhythmNote.isRest){
+      newNote = new UnprocessedNote(["Rest"], 4, getDurationString(rhythmNote));;
     }
 
     else{
       let [noteName, noteOctave] = randomPitchFromScale(voice, getNoteDuration(rhythmNote), false);
-      newNote = createNote([noteName], noteOctave, getDurationString(rhythmNote));
+      newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
     }
 
     newNotes.push(newNote);
@@ -1846,8 +1839,9 @@ function simplifyVoice(voice) {
         else{
           let newDuration = Object.keys(durationMapping).find(k => Math.abs(durationMapping[k] - (originalTuplet.realDuration / currentTupletNotes.length)) < 1e-6);
           for (note of currentTupletNotes){
-            let [noteName, noteOctave] = note.getKeys()[0].split("/");
-            let newNote = createNote([noteName], noteOctave, newDuration);
+            let noteName = note.noteName;
+            let noteOctave = note.octave;
+            let newNote = new UnprocessedNote(noteName, noteOctave, newDuration);
             simplifiedNotes.push(newNote);
           }
         }
@@ -1856,7 +1850,8 @@ function simplifyVoice(voice) {
     }
 
     else{
-      let [noteName, noteOctave] = beginningNote.getKeys()[0].split("/");
+      let noteName = beginningNote.noteName;
+      let noteOctave = beginningNote.octave;
       let combinedDuration = getNoteDuration(beginningNote);
       let j = i + 1;
 
@@ -1874,7 +1869,7 @@ function simplifyVoice(voice) {
             k => durationMapping[k] === combinedDuration
           );
 
-          let combinedNote = createNote([noteName], noteOctave, durationStr);
+          let combinedNote = new UnprocessedNote(noteName, noteOctave, durationStr);
           simplifiedNotes.push(combinedNote);
           i = j; 
           break;
@@ -1929,8 +1924,9 @@ function complicateVoice(voice){
     if (complicatedNotes != null){
       for (let newNote of complicatedNotes){
         if (newNote == complicatedNotes[0] || Math.random() < .3){
-          let [noteName, noteOctave] = note.getKeys()[0].split("/");
-          newNote = createNote([noteName], noteOctave, getDurationString(newNote));
+          let noteName = note.noteName;
+          let noteOctave = note.octave;
+          newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(newNote));
         }
         notes.push(newNote);
       }
@@ -2075,10 +2071,9 @@ function generateHarmony(){
           isDotted = true;
         }
 
-    addNote(harmonyVoice, createNote(chordNotes, 4, durationStr, isDotted));
+    addNote(harmonyVoice, new UnprocessedNote(chordNotes, 4, durationStr, isDotted));
     chordNotes = [];
   }
-
   drawNotes(harmonyVoice);
 }
 

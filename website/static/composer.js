@@ -615,6 +615,7 @@ randomHarmonyButton?.addEventListener("click", generateHarmony);
 //  Get functions /////////////////////////
 
 function getNoteDuration(note) {
+  console.log("note.name", note.name);
   let dur = note.duration;
   if (note.dotted){
     dur = dur + "d";
@@ -662,7 +663,7 @@ function getAllowedPitches(voice, noteDuration) {
     let currentChord = null;
     for (let i = 0; i < harmonyVoice.unprocessedNotes.length; ++i){
       currentChord = harmonyVoice.unprocessedNotes[i];
-      durationSearched += getNoteDuration(currentChord);
+      durationSearched += currentChord.duration;
       if (durationSearched <= totalDuration && i + 1 < harmonyVoice.unprocessedNotes.length){
         continue;
       }
@@ -672,7 +673,7 @@ function getAllowedPitches(voice, noteDuration) {
       if (nextOverlap > currentOverlap && i + 1 < harmonyVoice.unprocessedNotes.length){
         currentChord = harmonyVoice.unprocessedNotes[i+1]
       }
-      const chordNotes = currentChord.keys.map(k => k.split("/")[0]);
+      const chordNotes = currentChord.noteName;
 
       // Keep only pitches that match the chord notes
       const harmonyPitches = scalePitches.filter(p => {
@@ -779,8 +780,14 @@ function createNote(noteNames, noteOctave, noteDuration) {
   return note;
 }
 
-function createTuplet(tupletObj){
-  const tuplet = new Vex.Flow.Tuplet(tupletObj.tupletNotes, {
+function createTuplet(tupletObj, part) {
+  // map UnprocessedNotes to their StaveNotes for VexFlow
+  const staveNotes = tupletObj.tupletNotes.map(un => {
+    const idx = part.unprocessedNotes.indexOf(un);
+    return part.notes[idx];
+  });
+
+  const tuplet = new Vex.Flow.Tuplet(staveNotes, {
     num_notes: tupletObj.tupletInfo[0],
     notes_occupied: tupletObj.tupletInfo[1],
     ratioed: true,
@@ -824,7 +831,7 @@ function fillDuration(fillNoteDuration, note) {
 function addNote(part, unprocessedNote) { 
   part.unprocessedNotes.push(unprocessedNote);  
   let note = unprocessedNote.toStaveNote();
-  let tupletObj = findTuplet(note, part);
+  let tupletObj = findTuplet(unprocessedNote, part);
   
   if (tupletObj != null){
     if (tupletObj.tupletNotes[tupletObj.tupletNotes.length - 1] == note){
@@ -996,7 +1003,6 @@ function drawNotes(part) {
   eraseDrawing(part);
 
   const requiredWidth = estimateStaffLength(part);
-
   ensureSvgSize(part.name, requiredWidth);
 
   let context = contexts[part.name];
@@ -1034,7 +1040,7 @@ function drawNotes(part) {
       beam.setContext(context).draw();
     }
     for (const tupletObj of tupletsToDraw) {
-      const tuplet = createTuplet(tupletObj);
+      const tuplet = createTuplet(tupletObj, part);
       tuplet.setContext(context).draw();
     }
     tupletsToDraw = [];
@@ -1044,25 +1050,34 @@ function drawNotes(part) {
   }
 
   while (notes.length > 0) {
-    const note = notes.shift();
-    measureNotes.push(note);
+  const note = notes.shift();
+  measureNotes.push(note);
 
-    const originalTuplet = findTuplet(note, part);
+  const noteIndex = part.notes.indexOf(note);
+  const unprocessedNote = part.unprocessedNotes[noteIndex];
+
+  if (unprocessedNote === undefined) {
+    // fill note — not in part.unprocessedNotes, just a StaveNote
+    measureDuration += durationMapping[note.getDuration()];
+  } else {
+    const originalTuplet = findTuplet(unprocessedNote, part);
     if (originalTuplet != null) {
-      if (originalTuplet.tupletNotes[originalTuplet.tupletNotes.length - 1] == note){
+      const lastUnprocessed = originalTuplet.tupletNotes[originalTuplet.tupletNotes.length - 1];
+      if (lastUnprocessed == unprocessedNote) {
         measureDuration += originalTuplet.realDuration;
         tupletsToDraw.push(originalTuplet);
       }
     } else {
-      measureDuration += getNoteDuration(note);
-    }
-
-    if (measureDuration >= measureLength) {
-      drawMeasure(measureNotes);
-      measureNotes = [];
-      measureDuration = 0;
+      measureDuration += getNoteDuration(unprocessedNote);
     }
   }
+
+  if (measureDuration >= measureLength) {
+    drawMeasure(measureNotes);
+    measureNotes = [];
+    measureDuration = 0;
+  }
+}
 
   if (measureNotes.length > 0) {
     const remaining = measureLength - (part.duration % measureLength);
@@ -1139,6 +1154,7 @@ function generatePhrase(part, duration, allowTuplets = true){
 
     //tuplet creation
     if (allowTuplets && !durationStr.includes("d") && durationMapping[durationStr] < 1 && ((Math.random() < 0.5) && durationMapping[durationStr] >= 1 / timeSignature[1] && duration - currentDuration >= 2 * durationMapping[durationStr])){
+      console.log("tuplet");
       let notesOccupied = 2;
       let possibleTupletSizes = [3, 5, 7];
 
@@ -1411,6 +1427,27 @@ function reflectVoice(voice, axisPitch) {
 }
 
 function shiftVoice(voice, distance) {
+  const shiftDuration = durationMapping[distance];
+  let currentPos = shiftDuration;
+
+  for (let note of voice.unprocessedNotes) {
+    let tuplet = findTuplet(note, voice);
+    if (tuplet && tuplet.tupletNotes[0] === note) {
+      let measureEnd = (Math.floor(currentPos / measureLength) + 1) * measureLength;
+      if (currentPos + tuplet.realDuration > measureEnd) {
+        console.warn("Shift rejected: tuplet would straddle measure boundary");
+        return;
+      }
+    }
+    if (tuplet) {
+      if (tuplet.tupletNotes[tuplet.tupletNotes.length - 1] === note) {
+        currentPos += tuplet.realDuration;
+      }
+    } else {
+      currentPos += getNoteDuration(note);
+    }
+  }
+
   let notes = voice.unprocessedNotes;
   let tuplets = [];
   let tupletNotes = [];
@@ -1431,16 +1468,9 @@ function shiftVoice(voice, distance) {
   }
 
   resetPart(voice);
-
-  for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
+  for (let tuplet of tuplets) voice.tuplets.push(tuplet);
   addNote(voice, new UnprocessedNote(['Rest'], 4, distance));
-  
-  for (let note of notes){
-    addNote(voice, note);
-  }
+  for (let note of notes) addNote(voice, note);
   drawNotes(voice);
 }
 
@@ -1572,7 +1602,7 @@ function shuffleRhythm(voice) {
         if (foundTuplet == currentTuplet){
           ++i;
           let pitchNote = pitchNotes[i];
-          if (pitchNote.isRest()){
+          if (pitchNote.isRest){
             noteName = "Rest";
             noteOctave = 4;
           }

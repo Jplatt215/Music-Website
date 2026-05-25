@@ -86,7 +86,7 @@ let mode = "Standard";
 
 class Part {
   constructor(name, pitchRange = ["E3", "E6"], rhythmRange = [0.03125, 1], scale = ["C", "Chromatic"]) {
-    Object.assign(this, { name, pitchRange, rhythmRange, scale, unprocessedNotes: [], notes: [], ties: [], tuplets: [], toneNotes: [], memory: [], currentMemoryIndex: -1, muted: false, duration: 0 });
+    Object.assign(this, { name, pitchRange, rhythmRange, scale, unprocessedNotes: [], notes: [], ties: [], tuplets: [], toneNotes: [], memory: [], currentMemoryIndex: -1, muted: false, duration: 0, requiredWidth: 0});
   }
 }
 
@@ -96,11 +96,22 @@ class UnprocessedNote {
     this.octave = octave;
     this.duration = duration;
     this.dotted = dotted;
-    this.isRest = this.noteName[0] === "Rest";  // check first element
+    this.isRest = this.noteName[0] === "Rest"; 
+    this.tupletInfo = null;
   }
 
   toStaveNote() {
-    return createNote(this.noteName, this.octave, this.dotted ? this.duration + "d" : this.duration);  // pass array directly, no extra []
+    return createNote(this.noteName, this.octave, this.dotted ? this.duration + "d" : this.duration);
+  }
+
+  setTuplet(id, totalTupletDuration, ratio, count, index) {
+    this.tupletInfo = {
+      id: id,
+      totalTupletDuration: totalTupletDuration,
+      ratio: ratio,
+      count: count,
+      index: index
+    };
   }
 }
 
@@ -108,13 +119,12 @@ const upperVoice = new Part("upperVoice", ["C4", "C6"]);
 const middleVoice = new Part("middleVoice", ["A3", "F5"]);
 const lowerVoice = new Part("lowerVoice", ["E2", "C4"]);
 const voice4 = new Part("voice4", ["D3", "B5"]);
-const harmonyVoice = new Part("harmonyVoice"); // uses default
+const harmonyVoice = new Part("harmonyVoice");
 const voicesMap = { upperVoice, middleVoice, lowerVoice, voice4, harmonyVoice };
 
 let clipboard = { unprocessedNotes: [], notes: [], ties: [], tuplets: [], toneNotes: [] };
-let totalDuration = 0; //used for comparing current voice duration to harmony chord durations without interacting with voice.duration
+let totalDuration = 0; 
 let sampler = null;
-let voiceDistance = null;
 let selectedVoices = [upperVoice];
 
 
@@ -186,9 +196,9 @@ const typeMapping = {
 
 function getDurationKeyFromValue(value) {
   for (const [key, val] of Object.entries(durationMapping)) {
-    if (val === value) return key;
+    if (Math.abs(val - value) < 1e-9) return key;
   }
-  throw new Error(`No duration key found for value ${value}`);
+  return null;
 }
 
 const scalesMapping = {
@@ -461,9 +471,8 @@ transposeDropdown.addEventListener("click", () => {
   const interval = parseInt(transposeDropdown.value, 10);
   for (const part of selectedVoices){
     transposeVoice(part, interval);
-    updateMemory();
   };
-
+  updateMemory();
   transposeDropdown.style.display = "none";
 });
 
@@ -532,7 +541,7 @@ voiceContainers.forEach(container => {
     if (container.classList.contains("active")) {
       selectedVoices.push(voiceObj);
     } else {
-      selectedVoices = selectedVoices.filter(v => v.name !== voiceName);
+      selectedVoices = selectedVoices.filter(voice => voice.name !== voiceName);
     }
   });
 });
@@ -574,10 +583,7 @@ setupPlayButton(chordPlayButton, [harmonyVoice]);
 bindVoiceAction(generatePhraseButton, part => {
   resetPart(part);
   totalDuration = 0;
-  for (const note of generatePhrase(part, numMeasures * measureLength)) {
-    addNote(part, note);
-  }
-  drawNotes(part);
+  generatePhrase(part, numMeasures * measureLength);
 });
 
 separateVoiceButton?.addEventListener("click", () => {
@@ -585,8 +591,6 @@ separateVoiceButton?.addEventListener("click", () => {
   updateMemory();
 });
 bindVoiceAction(reverseButton, reverseVoice);
-bindVoiceAction(copyPartButton, copyPart);
-bindVoiceAction(pastePartButton, pastePart);
 bindVoiceAction(changeRhythmButton, changeRhythm);
 bindVoiceAction(shuffleRhythmButton, shuffleRhythm);
 bindVoiceAction(shuffleNotesButton, shuffleNotes);
@@ -594,6 +598,15 @@ bindVoiceAction(shufflePitchButton, shufflePitch);
 bindVoiceAction(changePitchButton, changePitch);
 bindVoiceAction(complicateButton, complicateVoice);
 bindVoiceAction(simplifyButton, simplifyVoice);
+
+copyPartButton?.addEventListener("click", () => {
+  copyPart();
+});
+
+pastePartButton?.addEventListener("click", () => {
+  pastePart();
+  updateMemory();
+});
 
 previousButton?.addEventListener("click", () => accessMemory(-1));
 nextButton?.addEventListener("click", () => accessMemory(1));
@@ -615,7 +628,6 @@ randomHarmonyButton?.addEventListener("click", generateHarmony);
 //  Get functions /////////////////////////
 
 function getNoteDuration(note) {
-  console.log("note.name", note.name);
   let dur = note.duration;
   if (note.dotted){
     dur = dur + "d";
@@ -633,7 +645,7 @@ function getDurationString(note) {
     }
   }
 
-  return null; // not found
+  return null; 
 }
 
 function getAllowedPitches(voice, noteDuration) {
@@ -651,14 +663,14 @@ function getAllowedPitches(voice, noteDuration) {
   const scale = scalesMapping[scaleName];
 
   // Filter allowed pitches by scale
-  const scalePitches = allowedPitches.filter(p => {
-    const note = p.slice(0, -1); // remove octave
+  const scalePitches = allowedPitches.filter(pitch => {
+    const note = pitch.slice(0, -1); // remove octave
     const pitchClass = noteMapping[note];
     return pitchClass !== undefined &&
       scale.includes((pitchClass - rootIndex + 12) % 12);
   });
 
-  if (mode == "Harmony"){
+  if (mode === "Harmony"){
     let durationSearched = 0;
     let currentChord = null;
     for (let i = 0; i < harmonyVoice.unprocessedNotes.length; ++i){
@@ -676,8 +688,8 @@ function getAllowedPitches(voice, noteDuration) {
       const chordNotes = currentChord.noteName;
 
       // Keep only pitches that match the chord notes
-      const harmonyPitches = scalePitches.filter(p => {
-        const note = p.slice(0, -1); // drop octave
+      const harmonyPitches = scalePitches.filter(pitch => {
+        const note = pitch.slice(0, -1); // drop octave
         return chordNotes.includes(note);
       });
 
@@ -687,32 +699,33 @@ function getAllowedPitches(voice, noteDuration) {
   return scalePitches;
 }
 
-function getNoteDurationInSeconds(voice, note) { // Approximate seconds per note based on BPM and note duration
-    const bpm = 120; 
-    const quarterNoteSeconds = 60 / bpm;
-    let duration = getNoteDuration(note) * 4;
-    let foundTuplet = findTuplet(note, voice);
-    if (foundTuplet){
-      duration = duration * foundTuplet.tupletInfo[1] / foundTuplet.tupletInfo[0];
-    }
+function getNoteDurationInSeconds(voice, note) {
+  const bpm = parseFloat(bpmSlider.value) || 120;
+  const quarterNoteSeconds = 60 / bpm;
+  let durationInWholeNotes = getNoteDuration(note);
 
-    return duration * quarterNoteSeconds;
+  // Adjust duration if this note belongs to a tuplet
+  if (note.tupletInfo) {
+    const { ratio } = note.tupletInfo;
+    durationInWholeNotes = durationInWholeNotes * ratio[1] / ratio[0];
+  }
+
+  // Multiply by 4 to convert from whole notes to quarter notes
+  return durationInWholeNotes * 4 * quarterNoteSeconds;
 }
 
 function checkNoteInScale(note, voice) {
-    if (note.isRest) return true;
+  if (note.isRest) return true;
 
-    const scaleRoot = voice.scale[0];    
-    const scaleIntervals = scalesMapping[voice.scale[1]];  
+  const scaleRoot = voice.scale[0];
+  const scaleIntervals = scalesMapping[voice.scale[1]];
 
-    const scaleNotes = scaleIntervals.map(interval => {
-        const semitone = (noteMapping[scaleRoot] + interval) % 12;
-        return Object.keys(noteMapping).find(key => noteMapping[key] === semitone);
-    });
+  const scaleNotes = scaleIntervals.map(interval => {
+    const semitone = (noteMapping[scaleRoot] + interval) % 12;
+    return Object.keys(noteMapping).find(key => noteMapping[key] === semitone);
+  });
 
-    const noteName = note.notename;
-
-    return scaleNotes.includes(noteName);
+  return scaleNotes.includes(note.noteName[0]);
 }
 
 function randomPitchFromScale(voice, noteDuration, allowRest = true) {
@@ -780,26 +793,10 @@ function createNote(noteNames, noteOctave, noteDuration) {
   return note;
 }
 
-function createTuplet(tupletObj, part) {
-  // map UnprocessedNotes to their StaveNotes for VexFlow
-  const staveNotes = tupletObj.tupletNotes.map(un => {
-    const idx = part.unprocessedNotes.indexOf(un);
-    return part.notes[idx];
-  });
-
-  const tuplet = new Vex.Flow.Tuplet(staveNotes, {
-    num_notes: tupletObj.tupletInfo[0],
-    notes_occupied: tupletObj.tupletInfo[1],
-    ratioed: true,
-  });
-  return tuplet;
-}
-
 function fillDuration(fillNoteDuration, note) {
   let noteName = null;
   let noteOctave = null;
   let octaveStr = null;
-  let isDotted = false;
 
   if ((note == "rest") || note.isRest()){
     noteName = "Rest";
@@ -820,7 +817,6 @@ function fillDuration(fillNoteDuration, note) {
         fillNoteDuration -= durValue;
         let newNote = createNote([noteName], noteOctave, durStr);
         fillNotes.push(newNote);
-        isDotted = false;
         break; 
       }
     }
@@ -828,57 +824,93 @@ function fillDuration(fillNoteDuration, note) {
   return fillNotes;
 }
 
-function addNote(part, unprocessedNote) { 
-  part.unprocessedNotes.push(unprocessedNote);  
-  let note = unprocessedNote.toStaveNote();
-  let tupletObj = findTuplet(unprocessedNote, part);
-  
-  if (tupletObj != null){
-    if (tupletObj.tupletNotes[tupletObj.tupletNotes.length - 1] == note){
-      part.duration += tupletObj.realDuration;
-    }
-    part.notes.push(note);
-    part.toneNotes.push([staveNoteToToneJSNote(note), getNoteDuration(note) * tupletObj.tupletInfo[1] / tupletObj.tupletInfo[0]]);
-    return;
-  }
- 
-  if (((part.duration % measureLength) + getNoteDuration(note)) > measureLength){
-    let notesToTie = [];
-    let fillNoteDuration = measureLength - (part.duration % measureLength);
-    let overflowDuration = getNoteDuration(note) - (measureLength - (part.duration % measureLength)); //overflow into next measure
-    let fillNotes = fillDuration(fillNoteDuration, note);
+function round(val) {
+  return Math.round(val * 1e9) / 1e9;
+}
+function processNotes(part, unprocessedNotes, drawHarmony = false) {
+  let tupletNotes = [];
+  let measureNotes = [];
+  let posInMeasure = 0;  // tracks position within current measure, resets to 0 on flush
 
-    for (const fillNote of fillNotes) {
-      part.notes.push(fillNote);
-    }
-    notesToTie.push(...fillNotes);
-    
-    while (overflowDuration > measureLength){
-      fillNoteDuration = measureLength;
-      overflowDuration = overflowDuration - measureLength;
-      let fillNotes = fillDuration(fillNoteDuration, note);
-      for (const fillNote of fillNotes) {
-        part.notes.push(fillNote);
+  for (let unprocessedNote of unprocessedNotes) {
+    part.unprocessedNotes.push(unprocessedNote);
+    let note = unprocessedNote.toStaveNote();
+
+    if (unprocessedNote.tupletInfo) {
+      const { totalTupletDuration, ratio, count, index } = unprocessedNote.tupletInfo;
+
+      tupletNotes.push(note);
+      measureNotes.push(note);
+      part.toneNotes.push([staveNoteToToneJSNote(note), getNoteDuration(note) * ratio[1] / ratio[0]]);
+
+      if (index === count) {
+        const vfTuplet = new Tuplet(tupletNotes, {
+          num_notes: ratio[0],
+          notes_occupied: ratio[1],
+          ratioed: true
+        });
+        part.tuplets.push({ tupletNotes: [...tupletNotes], vfTuplet, realDuration: totalTupletDuration });
+        posInMeasure = round(posInMeasure + totalTupletDuration);
+        tupletNotes = [];
+
+        if (posInMeasure >= measureLength) {
+          part.notes.push([...measureNotes]);
+          measureNotes = [];
+          posInMeasure = 0;
+        }
       }
-      notesToTie.push(...fillNotes);
-    }
-    let overFlowNotes = fillDuration(overflowDuration, note);
 
-    for (const overFlowNote of overFlowNotes) {
-      part.notes.push(overFlowNote);
-    }
-    notesToTie.push(...overFlowNotes);
-    
-    if(!note.isRest()){
-      part.ties.push(notesToTie);
+    } else {
+      const noteDur = getNoteDuration(note);
+
+      if (round(posInMeasure + noteDur) > measureLength) {
+        const fillDur    = round(measureLength - posInMeasure);
+        let overflowDur  = round(noteDur - fillDur);
+        const notesToTie = [];
+
+        const fillNotes = fillDuration(fillDur, note);
+        measureNotes.push(...fillNotes);
+        notesToTie.push(...fillNotes);
+        part.notes.push([...measureNotes]);
+        measureNotes = [];
+        posInMeasure = 0;
+
+        while (overflowDur > measureLength) {
+          const chunk = fillDuration(measureLength, note);
+          notesToTie.push(...chunk);
+          part.notes.push([...chunk]);
+          overflowDur = round(overflowDur - measureLength);
+        }
+
+        if (overflowDur > 1e-9) {
+          const tail = fillDuration(overflowDur, note);
+          measureNotes.push(...tail);
+          notesToTie.push(...tail);
+          posInMeasure = overflowDur;
+        }
+
+        if (!note.isRest()) part.ties.push(notesToTie);
+
+      } else {
+        measureNotes.push(note);
+        posInMeasure = round(posInMeasure + noteDur);
+
+        if (posInMeasure >= measureLength) {
+          part.notes.push([...measureNotes]);
+          measureNotes = [];
+          posInMeasure = 0;
+        }
+      }
+
+      part.toneNotes.push([staveNoteToToneJSNote(note), noteDur]);
     }
   }
 
-  else{
-    part.notes.push(note);  
+  if (measureNotes.length > 0) {
+    part.notes.push([...measureNotes]);
   }
-  part.duration += getNoteDuration(note);
-  part.toneNotes.push([staveNoteToToneJSNote(note), getNoteDuration(note)]);
+
+  drawAllVoices(drawHarmony);
 }
 
 function resetPart(part){
@@ -890,53 +922,63 @@ function resetPart(part){
   part.duration = 0;
 }
 
-function rebuildVoice(voice, notes, tuplets = []) {
-  resetPart(voice);
-  tuplets.forEach(t => voice.tuplets.push(t));
-  notes.forEach(n => addNote(voice, n));
-  drawNotes(voice);
-}
-
-
 //  Memory /////////////////////////
-
-function updateMemory(){
-  for (let voice of selectedVoices) {
-    let newVoiceMemory = [voice.unprocessedNotes, voice.tuplets];
-    voice.memory.splice(voice.currentMemoryIndex + 1, 0, newVoiceMemory);
-voice.currentMemoryIndex += 1;
+function updateMemory() {
+  for (const voice of selectedVoices) {
+    voice.memory.splice(voice.currentMemoryIndex + 1);
+    const snapshot = voice.unprocessedNotes.map(note => {
+      const copy = new UnprocessedNote([...note.noteName], note.octave, note.duration, note.dotted);
+      if (note.tupletInfo) copy.tupletInfo = { ...note.tupletInfo };
+      return copy;
+    });
+    voice.memory.push(snapshot);
+    voice.currentMemoryIndex = voice.memory.length - 1;
   }
 }
 
-function accessMemory(indexDifference){
-  for (let voice of selectedVoices){
-    if (voice.currentMemoryIndex + indexDifference < 0 || voice.currentMemoryIndex + indexDifference > voice.memory.length - 1 || voice.memory.length === 0) {
-      continue;
-    } 
-    voice.currentMemoryIndex += indexDifference;
-    let voiceMemory = voice.memory[voice.currentMemoryIndex];
+function accessMemory(indexDifference) {
+  for (const voice of selectedVoices) {
+    const newIdx = voice.currentMemoryIndex + indexDifference;
+    if (newIdx < 0 || newIdx >= voice.memory.length) continue;
+    voice.currentMemoryIndex = newIdx;
+    const snapshot = voice.memory[newIdx];
     resetPart(voice);
-    let notes = voiceMemory[0];
-    voice.tuplets = voiceMemory[1];
-    for (let note of notes){
-      addNote(voice, note);
-    }
-    drawNotes(voice);
+    processNotes(voice, snapshot);
   }
+}
+
+function copyPart() {
+  clipboard = {};
+  for (const voice of selectedVoices) {
+    clipboard[voice.name] = voice.unprocessedNotes.map(note => {
+      const copy = new UnprocessedNote([...note.noteName], note.octave, note.duration, note.dotted);
+      if (note.tupletInfo) copy.tupletInfo = { ...note.tupletInfo };
+      return copy;
+    });
+  }
+}
+
+function pastePart() {
+  const copiedVoiceNames = Object.keys(clipboard);
+  if (!copiedVoiceNames.length) return;
+
+  selectedVoices.forEach((voice, i) => {
+    // Loop through copied voices if there are fewer copied than selected
+    const sourceVoiceName = copiedVoiceNames[i % copiedVoiceNames.length];
+    const sourceNotes = clipboard[sourceVoiceName];
+
+    const notes = sourceNotes.map(note => {
+      const copy = new UnprocessedNote([...note.noteName], note.octave, note.duration, note.dotted);
+      if (note.tupletInfo) copy.tupletInfo = { ...note.tupletInfo };
+      return copy;
+    });
+
+    resetPart(voice);
+    processNotes(voice, notes);
+  });
 }
 
 //  Draw /////////////////////////
-
-function createRendererAndContext(partName) {
-  const container = document.getElementById(partName + "Container");
-  if (!container) return; // <-- prevents errors
-  const width = container.clientWidth || 500;
-  const height = container.clientHeight || 300;
-
-  renderers[partName] = new Renderer(container, Renderer.Backends.SVG);
-  renderers[partName].resize(width, height);
-  contexts[partName] = renderers[partName].getContext();
-}
 
 function ensureSvgSize(partName, requiredWidth) {
   const container = containers[partName];
@@ -959,135 +1001,83 @@ function ensureSvgSize(partName, requiredWidth) {
   contexts[partName] = renderers[partName].getContext();
 }
 
-function estimateStaffLength(part) {// Estimate total width needed for all measures before drawing
-
-  const notes = [...part.notes];
-  let total = 0;
-  let measureDuration = 0;
-  let measureNotesCount = 0;
-
-  while (notes.length > 0) {
-    const n = notes.shift();
-    const tupletObj = findTuplet(n, part);
-    if (tupletObj) {
-      // count the whole tuplet at once only when finishing the tuplet
-      if (tupletObj.tupletNotes[tupletObj.tupletNotes.length - 1] === n) {
-        measureDuration += tupletObj.realDuration;
-        measureNotesCount += tupletObj.tupletNotes.length;
-      } else {
-        measureNotesCount += 1;
-      }
-    } else {
-      measureDuration += getNoteDuration(n);
-      measureNotesCount += 1;
-    }
-
-    if (measureDuration >= measureLength) {
-      const staveWidth = 200 + measureNotesCount * 40;
-      total += staveWidth;
-      measureDuration = 0;
-      measureNotesCount = 0;
-    }
-  }
-
-  if (measureNotesCount > 0) {
-    const staveWidth = 200 + measureNotesCount * 40;
-    total += staveWidth;
-  }
-
-  // Add a small margin at the end
-  return Math.max(total, 800) + 100;
+function getGlobalMeasureWidths(parts) {
+  const globalWidths = [];
+  parts.forEach(part => {
+    if (!part.notes.length) return;
+    part.notes.forEach((measureNotes, i) => {
+      const width = 200 + measureNotes.length * 40;
+      globalWidths[i] = Math.max(globalWidths[i] || 0, width);
+    });
+  });
+  return globalWidths;
 }
 
-function drawNotes(part) {
-  eraseDrawing(part);
+function getTupletsForMeasure(part, measureIndex) {
+  const measureNoteSet = new Set(part.notes[measureIndex]);
+  return part.tuplets
+    .filter(tuplet => tuplet.tupletNotes.some(note => measureNoteSet.has(note)))
+    .map(tuplet => tuplet.vfTuplet);
+}
 
-  const requiredWidth = estimateStaffLength(part);
-  ensureSvgSize(part.name, requiredWidth);
+function drawAllVoices(includeHarmony = false) {
+  const parts = includeHarmony
+    ? [harmonyVoice]
+    : Object.values(voicesMap).filter(voiceObj => voiceObj !== harmonyVoice);
 
-  let context = contexts[part.name];
-  const notes = [...part.notes];
-  const ties = [...part.ties];
+  const globalMeasureWidths = getGlobalMeasureWidths(parts);
+  const requiredWidth = globalMeasureWidths.reduce((a, b) => a + b, 0) + 100;
 
+  parts.forEach(part => {
+    eraseDrawing(part);
+    ensureSvgSize(part.name, requiredWidth);
+  });
+
+  const measureCount = Math.max(...parts.map(part => part.notes.length), 0);
   let staffLength = 0;
-  let measureNotes = [];
-  let measureDuration = 0;
-  let measureIndex = 0; 
-  let tupletsToDraw = [];
 
-  function drawMeasure(notesToDraw) {
-    const staveWidth = 200 + notesToDraw.length * 40;
-    const stave = new Stave(staffLength, 60, staveWidth);
+  for (let measureIndex = 0; measureIndex < measureCount; measureIndex++) {
+    const staveWidth = globalMeasureWidths[measureIndex] || 400;
+    const staves = {};
+    const voiceObjs = [];
 
-    if (measureIndex === 0) {
-      stave.addClef("treble").addTimeSignature(`${timeSignature[0]}/${timeSignature[1]}`);
-    }
-    stave.setContext(context).draw();
+    parts.forEach(part => {
+      const stave = new Stave(staffLength, 60, staveWidth);
+      if (measureIndex === 0) {
+        stave.addClef("treble").addTimeSignature(`${timeSignature[0]}/${timeSignature[1]}`);
+      }
+      stave.setContext(contexts[part.name]).draw();
+      staves[part.name] = stave;
 
-    const voice = new Voice({
-      num_beats: timeSignature[0],
-      beat_value: timeSignature[1],
-    }).setStrict(false);
+      const notes = part.notes[measureIndex] || [];
+      const voice = new Voice({
+        num_beats: timeSignature[0],
+        beat_value: timeSignature[1],
+      }).setStrict(false);
+      voice.addTickables(notes);
 
-    voice.addTickables(notesToDraw);
-    const beams = Vex.Flow.Beam.generateBeams(notesToDraw);
-    new Formatter().joinVoices([voice]).format([voice], staveWidth - 80);
+      voiceObjs.push({
+        voice,
+        part,
+        beams: Vex.Flow.Beam.generateBeams(notes),
+        tuplets: getTupletsForMeasure(part, measureIndex),
+      });
+    });
 
-    for (let note of notesToDraw) {
-      note.setStave(stave).setContext(context).draw();
-    }
-    for (const beam of beams) {
-      beam.setContext(context).draw();
-    }
-    for (const tupletObj of tupletsToDraw) {
-      const tuplet = createTuplet(tupletObj, part);
-      tuplet.setContext(context).draw();
-    }
-    tupletsToDraw = [];
+    const formatter = new Formatter();
+    formatter.joinVoices(voiceObjs.map(voiceObj => voiceObj.voice));
+    formatter.formatToStave(voiceObjs.map(voiceObj => voiceObj.voice), Object.values(staves)[0]);
+
+    voiceObjs.forEach(({ voice, part, beams, tuplets }) => {
+      voice.draw(contexts[part.name], staves[part.name]);
+      beams.forEach(beam => beam.setContext(contexts[part.name]).draw());
+      tuplets.forEach(tuplet => tuplet.setContext(contexts[part.name]).draw());
+    });
 
     staffLength += staveWidth;
-    measureIndex++;
   }
 
-  while (notes.length > 0) {
-  const note = notes.shift();
-  measureNotes.push(note);
-
-  const noteIndex = part.notes.indexOf(note);
-  const unprocessedNote = part.unprocessedNotes[noteIndex];
-
-  if (unprocessedNote === undefined) {
-    // fill note — not in part.unprocessedNotes, just a StaveNote
-    measureDuration += durationMapping[note.getDuration()];
-  } else {
-    const originalTuplet = findTuplet(unprocessedNote, part);
-    if (originalTuplet != null) {
-      const lastUnprocessed = originalTuplet.tupletNotes[originalTuplet.tupletNotes.length - 1];
-      if (lastUnprocessed == unprocessedNote) {
-        measureDuration += originalTuplet.realDuration;
-        tupletsToDraw.push(originalTuplet);
-      }
-    } else {
-      measureDuration += getNoteDuration(unprocessedNote);
-    }
-  }
-
-  if (measureDuration >= measureLength) {
-    drawMeasure(measureNotes);
-    measureNotes = [];
-    measureDuration = 0;
-  }
-}
-
-  if (measureNotes.length > 0) {
-    const remaining = measureLength - (part.duration % measureLength);
-    if (remaining > 0) {
-      measureNotes.push(...fillDuration(remaining, "rest"));
-    }
-    drawMeasure(measureNotes);
-  }
-
-  drawTies(ties, context);
+  parts.forEach(part => drawTies(part.ties, contexts[part.name]));
 }
 
 function drawTies(tieGroups, context) {
@@ -1127,6 +1117,7 @@ function generatePhrase(part, duration, allowTuplets = true){
   let tupletNotes = [];
   const durationKeys = Object.keys(durationMapping);
   const allowedDurations = [];
+  let tupletId = 0;
 
   //only use rhythms within rhythm-range of voice
   for (let durationKey of durationKeys){
@@ -1153,825 +1144,741 @@ function generatePhrase(part, duration, allowTuplets = true){
     }
 
     //tuplet creation
-    if (allowTuplets && !durationStr.includes("d") && durationMapping[durationStr] < 1 && ((Math.random() < 0.5) && durationMapping[durationStr] >= 1 / timeSignature[1] && duration - currentDuration >= 2 * durationMapping[durationStr])){
-      console.log("tuplet");
+    if (allowTuplets && !durationStr.includes("d") && durationMapping[durationStr] < 1 && Math.random() < 0.5 
+    && durationMapping[durationStr] >= 1 / timeSignature[1]) {
       let notesOccupied = 2;
       let possibleTupletSizes = [3, 5, 7];
 
       let numTupletNotes = possibleTupletSizes[Math.floor(Math.random() * possibleTupletSizes.length)];
-      let realDuration = 2 * (durationMapping[durationStr]);
 
-      while(tupletNotes.length < numTupletNotes){
+      let realDuration = 2 * durationMapping[durationStr];
+
+      const measureRemaining = measureLength - (currentDuration % measureLength);
+
+      if (realDuration > measureRemaining) {
+        continue;
+      }
+
+      ++tupletId;
+
+      for (let i = 1; i <= numTupletNotes; i++) {
         let [noteName, noteOctave] = randomPitchFromScale(part, durationMapping[durationStr]);
-        tupletNotes.push(new UnprocessedNote(noteName, noteOctave, durationStr));
+
+        let tupletNote = new UnprocessedNote(noteName, noteOctave, durationStr);
+
+        tupletNote.setTuplet(
+          tupletId,
+          realDuration,
+          [numTupletNotes, notesOccupied],
+          numTupletNotes,
+          i
+        );
+
+        notes.push(tupletNote);
+
         totalDuration += durationMapping[durationStr] * 2 / numTupletNotes;
       }
 
-      notes.push(...tupletNotes);
-
-      part.tuplets.push({
-        tupletNotes: tupletNotes,
-        tupletInfo: [numTupletNotes, notesOccupied],
-        realDuration: realDuration
-      });
-      tupletNotes = [];
-      currentDuration += 2 * durationMapping[durationStr];
+      currentDuration += realDuration;
+      currentDuration = Math.round(currentDuration * 1e9) / 1e9;
     }
     
     else{
       let [noteName, noteOctave] = randomPitchFromScale(part, durationMapping[durationStr]);
       notes.push(new UnprocessedNote(noteName, noteOctave, durationStr));
       currentDuration += durationMapping[durationStr];
+      currentDuration = Math.round(currentDuration * 1e9) / 1e9;
       totalDuration += durationMapping[durationStr];
+      totalDuration = Math.round(currentDuration * 1e9) / 1e9;
     }
   }
-  return notes;
-}
-
-function generateMelody(part, duration){
-
+  processNotes(part, notes);
 }
 
 //  Accompany   /////////////////////////
 
 function separateVoice() {
-  let voiceToSeparate = selectedVoices[0];
-  if (!voiceToSeparate || !voiceToSeparate.unprocessedNotes?.length) {
-    return;
+  const voiceToSeparate = selectedVoices[0];
+  if (!voiceToSeparate || !voiceToSeparate.unprocessedNotes.length) return;
+
+  // Each voice gets its own bucket of new notes
+  const newNotesPerVoice = {};
+  for (const voiceName of voices) {
+    newNotesPerVoice[voiceName] = [];
   }
 
-  // Storage buckets aligned with `voices`
-  let newNotesPerVoice = voices.map(() => []);
-  let newTupletsPerVoice = voices.map(() => []);
-  let newTupletNotesPerVoice = voices.map(() => []);
-
-  // Track duration for harmony-mode pitch filtering
-  let separationDuration = 0;
   totalDuration = 0;
 
-  for (let noteObj of voiceToSeparate.unprocessedNotes) {
-        // ---- Extract pitch safely ----
-    let noteName = noteObj.noteName;              // e.g. "Bb/4"
-    let noteOctave = noteObj.octave;
+  for (const note of voiceToSeparate.unprocessedNotes) {
+    // Find which selected voices can play this pitch in their range
+    const candidateVoices = [];
+    for (const voiceName of voices) {
+      const voice = selectedVoices.find(selected => selected.name === voiceName);
+      if (!voice) continue;
 
-    let noteDuration = noteObj.duration;
-    console.log("noteDuration", noteDuration);
-
-    // ---- Compute allowed pitches per note ----
-    let candidateVoices = voices.filter(vName => {
-
-      const sel = selectedVoices.find(s => s.name === vName);
-      if (!sel) return false;
-
-      const allowedPitches = getAllowedPitches(
-        voicesMap[vName],
-        noteDuration
-      );
-
-      return allowedPitches.includes(noteName + noteOctave);
-    });
-
-    // ---- Choose target voice ----
-    let targetVoiceName = null;
-    if (candidateVoices.length > 0){
-      targetVoiceName = candidateVoices[Math.floor(Math.random() * candidateVoices.length)]
-    }
-    else{
-      targetVoiceName = voiceToSeparate.name;
-    }
-
-    let targetIdx = voices.indexOf(targetVoiceName);
-    let originalTuplet = findTuplet(noteObj, voiceToSeparate);
-
-    // ---- Distribute across all voices ----
-    voices.forEach((vName, i) => {
-
-      if (i === targetIdx && (noteObj.isRest !== true)) {
-        noteToAdd = new UnprocessedNote(noteName, noteOctave, noteDuration);
-        let newRawKey = noteToAdd.noteName;    
-      } 
-      else {
-        noteToAdd = new UnprocessedNote(["Rest"], 4, noteDuration);
+      if (note.isRest) {
+        candidateVoices.push(voiceName);
+        continue;
       }
 
-      newNotesPerVoice[i].push(noteToAdd);
+      const allowedPitches = getAllowedPitches(voicesMap[voiceName], durationMapping[note.duration]);
+      const pitchIsInRange = allowedPitches.includes(note.noteName[0] + note.octave);
+      if (pitchIsInRange) candidateVoices.push(voiceName);
+    }
 
-      // ---- Preserve tuplets ----
-      if (originalTuplet) {
+    // Pick a random candidate, or fall back to the original voice
+    const hasCandidate = candidateVoices.length > 0;
+    const targetVoiceName = hasCandidate
+      ? candidateVoices[Math.floor(Math.random() * candidateVoices.length)]
+      : voiceToSeparate.name;
 
-        newTupletNotesPerVoice[i].push(noteToAdd);
+    // Distribute the note — target voice gets the pitch, all others get a rest
+    for (const voiceName of voices) {
+      const isTargetVoice = voiceName === targetVoiceName;
+      let newNote;
 
-        if (newTupletNotesPerVoice[i].length === originalTuplet.tupletInfo[0]) {
-
-          newTupletsPerVoice[i].push({
-            tupletNotes: newTupletNotesPerVoice[i],
-            tupletInfo: [...originalTuplet.tupletInfo],
-            realDuration: originalTuplet.realDuration
-          });
-
-          newTupletNotesPerVoice[i] = [];
-        }
+      if (isTargetVoice && !note.isRest) {
+        newNote = new UnprocessedNote(note.noteName, note.octave, note.duration, note.dotted);
+      } else {
+        newNote = new UnprocessedNote(["Rest"], 4, note.duration, note.dotted);
       }
-    });
 
-    // ---- Advance duration for harmony mode ----
-    separationDuration += noteDuration;
-    totalDuration = separationDuration;
+      if (note.tupletInfo) newNote.tupletInfo = { ...note.tupletInfo };
+      newNotesPerVoice[voiceName].push(newNote);
+    }
+
+    totalDuration += durationMapping[note.duration] || 0;
   }
 
-  // ---- Rebuild selected voices ----
-  voices.forEach((vName, i) => {
-
-    const selVoice = selectedVoices.find(sel => sel.name === vName);
-    if (!selVoice) return;
-
-    resetPart(selVoice);
-
-    newTupletsPerVoice[i].forEach(t => selVoice.tuplets.push(t));
-
-    newNotesPerVoice[i].forEach(n => addNote(selVoice, n));
-
-    drawNotes(selVoice);
-  });
+  // Rebuild each selected voice with its new notes
+  for (const voiceName of voices) {
+    const voice = selectedVoices.find(selected => selected.name === voiceName);
+    if (!voice) continue;
+    resetPart(voice);
+    processNotes(voice, newNotesPerVoice[voiceName]);
+  }
 }
 
 //  Modify   /////////////////////////
 function reverseVoice(voice) {
   let reversedNotes = [...voice.unprocessedNotes].reverse();
-  let reversedTuplets = [];
-  let seenTuplets = new Set();
 
   for (let note of reversedNotes) {
-    let originalTuplet = findTuplet(note, voice);
-
-    if (originalTuplet && !seenTuplets.has(originalTuplet)) {
-      let tupletNotes = reversedNotes.filter(n => originalTuplet.tupletNotes.includes(n));
-
-      reversedTuplets.push({
-        tupletNotes: tupletNotes,
-        tupletInfo: [...originalTuplet.tupletInfo],
-        realDuration: originalTuplet.realDuration
-      });
-
-      seenTuplets.add(originalTuplet);
+    if (note.tupletInfo){
+      let { id, totalTupletDuration, ratio, count, index } = note.tupletInfo;
+      index = count - index + 1;
+      note.tupletInfo = {id, totalTupletDuration, ratio, count, index };
     }
   }
 
   resetPart(voice);
-
-  for (let tuplet of reversedTuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-  for (let note of reversedNotes) {
-    addNote(voice, note);
-  }
-
-  drawNotes(voice);
+  processNotes(voice, reversedNotes);
 }
 
 function reflectVoice(voice, axisPitch) {
-  let axisOctave = 4;     
-  let reflectedNotes = [];
-  let reflectedTuplets = [];
-  let tupletNotes = [];
-  let reflectedPitch = null;
-  let reflectedNote = null;
-  let reflectedScalarIndex = [];
-
+  const axisOctave = 4;
   let scale = scalesMapping[voice.scale[1]];
 
-  let axisDistanceFromRoot = Math.abs(noteMapping[voice.scale[0]] - noteMapping[axisPitch]);
-  let axisScalarIndex = scale.indexOf(axisDistanceFromRoot); 
+  const axisDistanceFromRoot = Math.abs(noteMapping[voice.scale[0]] - noteMapping[axisPitch]);
+  const axisScalarIndex = scale.indexOf(axisDistanceFromRoot);
 
-  for (let note of voice.unprocessedNotes) {
-    let noteName = note.noteName
-    let noteOctave = note.octave
+  const reflectedNotes = [];
+
+  for (const note of voice.unprocessedNotes) {
+    let reflectedNote;
+
     if (note.isRest) {
-      reflectedNote = note;
-    }
-    else{
-      let noteInscale = true;
-      if (!checkNoteInScale(note, voice)){
-        noteInscale = false;
-        scale = scalesMapping["Chromatic"];
-      }
-      let noteDistanceFromRoot = Math.abs(noteMapping[voice.scale[0]] - noteMapping[noteName]);
-      let noteScalarIndex = scale.indexOf(noteDistanceFromRoot);  
+      reflectedNote = new UnprocessedNote(note.noteName, note.octave, getDurationString(note));
+    } else {
+      const noteNameStr = note.noteName[0];
+      let workScale = scale;
 
-      if (axisScalarIndex == -1 && noteInscale){
-        let i = axisDistanceFromRoot;
-        while (scale.indexOf(i % 12) == -1){
-          ++i;
+      const noteIsInScale = checkNoteInScale(note, voice);
+      if (!noteIsInScale) {
+        workScale = scalesMapping["Chromatic"];
+      }
+
+      const noteDistanceFromRoot = Math.abs(noteMapping[voice.scale[0]] - noteMapping[noteNameStr]);
+      const noteScalarIndex = workScale.indexOf(noteDistanceFromRoot);
+
+      let reflectedScalarIndex;
+
+      if (axisScalarIndex === -1 && noteIsInScale) {
+        // Axis pitch is not in the scale — find nearest scale degree above it
+        let searchInterval = axisDistanceFromRoot;
+        while (workScale.indexOf(searchInterval % 12) === -1) {
+          searchInterval++;
         }
-        let foundScaleInterval = scale.indexOf(i % 12);
-        let distanceFromFoundScaleInterval = Math.abs((noteScalarIndex - foundScaleInterval + scale.length) % scale.length);
-        reflectedScalarIndex = (foundScaleInterval - distanceFromFoundScaleInterval - 1 + scale.length) % scale.length;
+        const nearestScaleDegree = workScale.indexOf(searchInterval % 12);
+        const distanceFromNearest = Math.abs((noteScalarIndex - nearestScaleDegree + workScale.length) % workScale.length);
+        reflectedScalarIndex = (nearestScaleDegree - distanceFromNearest - 1 + workScale.length) % workScale.length;
+      } else {
+        reflectedScalarIndex = ((axisScalarIndex - noteScalarIndex) + axisScalarIndex + workScale.length) % workScale.length;
       }
 
-      else{
-        reflectedScalarIndex = ((axisScalarIndex - noteScalarIndex) + axisScalarIndex + scale.length) % scale.length;
-      }
-      let reflectedPitchIndex = noteMapping[voice.scale[0]] + scale[reflectedScalarIndex];
-      reflectedPitch = Object.keys(noteMapping).find(key => noteMapping[key] === reflectedPitchIndex);
+      const reflectedPitchIndex = (noteMapping[voice.scale[0]] + workScale[reflectedScalarIndex]) % 12;
+      const reflectedPitch = Object.keys(noteMapping).find(key => noteMapping[key] === reflectedPitchIndex);
 
-      let noteAbs = noteOctave * 12 + noteDistanceFromRoot;
-      let axisAbs = axisOctave * 12 + axisDistanceFromRoot;
+      // Calculate reflected octave using absolute pitch positions
+      const noteAbs      = note.octave * 12 + noteDistanceFromRoot;
+      const axisAbs      = axisOctave  * 12 + axisDistanceFromRoot;
+      let   reflectedAbs = 2 * axisAbs - noteAbs;
+      let   newOctave    = Math.floor(reflectedAbs / 12);
 
-      // Reflect: new = 2*axis - note
-      let reflectedAbs = 2 * axisAbs - noteAbs;
-
-      // Convert back to note name + octave
-      noteOctave = Math.floor(reflectedAbs / 12);
-
-      let noteIdx = pitchIndex(reflectedPitch + noteOctave);
-      const minIdx = pitchIndex(voice.pitchRange[0]);
-      const maxIdx = pitchIndex(voice.pitchRange[1]);
+      // Clamp to voice pitch range
+      const noteIdx = pitchIndex(reflectedPitch + newOctave);
+      const minIdx  = pitchIndex(voice.pitchRange[0]);
+      const maxIdx  = pitchIndex(voice.pitchRange[1]);
       if (noteIdx < minIdx) {
-        noteOctave += Math.ceil((minIdx - noteIdx) / 12);
-      }
-      else if (noteIdx > maxIdx) {
-        noteOctave -= Math.ceil((noteIdx - maxIdx) / 12);
+        newOctave += Math.ceil((minIdx - noteIdx) / 12);
+      } else if (noteIdx > maxIdx) {
+        newOctave -= Math.ceil((noteIdx - maxIdx) / 12);
       }
 
-      reflectedNote = new UnprocessedNote(reflectedPitch, noteOctave, getDurationString(note));
+      reflectedNote = new UnprocessedNote([reflectedPitch], newOctave, getDurationString(note));
     }
+
+    if (note.tupletInfo) reflectedNote.tupletInfo = { ...note.tupletInfo };
     reflectedNotes.push(reflectedNote);
-
-    
-    let originalTuplet = findTuplet(note, voice);
-    if (originalTuplet){
-      tupletNotes.push(reflectedNote);
-      if (tupletNotes.length == originalTuplet.tupletInfo[0]) {
-        reflectedTuplets.push({
-          tupletNotes: tupletNotes,
-          tupletInfo: [...originalTuplet.tupletInfo],
-          realDuration: originalTuplet.realDuration
-        });
-        tupletNotes = [];
-      }
-    }
   }
 
   resetPart(voice);
-
-  for (let tuplet of reflectedTuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-  for (let note of reflectedNotes) {
-    addNote(voice, note);
-  }
-
-  drawNotes(voice);
+  processNotes(voice, reflectedNotes);
 }
 
 function shiftVoice(voice, distance) {
-  const shiftDuration = durationMapping[distance];
-  let currentPos = shiftDuration;
+  const shiftDur = durationMapping[distance];
 
-  for (let note of voice.unprocessedNotes) {
-    let tuplet = findTuplet(note, voice);
-    if (tuplet && tuplet.tupletNotes[0] === note) {
-      let measureEnd = (Math.floor(currentPos / measureLength) + 1) * measureLength;
-      if (currentPos + tuplet.realDuration > measureEnd) {
-        console.warn("Shift rejected: tuplet would straddle measure boundary");
-        return;
+  // Check tuplets won't cross barlines after shift
+  let currentPos = shiftDur;
+  for (const note of voice.unprocessedNotes) {
+    if (note.tupletInfo) {
+      const { index, count, totalTupletDuration } = note.tupletInfo;
+
+      if (index === 1) {
+        const measureEnd = (Math.floor(currentPos / measureLength) + 1) * measureLength;
+        const tupletWouldCrossBarline = currentPos + totalTupletDuration > measureEnd;
+        if (tupletWouldCrossBarline) {
+          console.warn("Shift rejected: tuplet would cross measure boundary");
+          return;
+        }
       }
-    }
-    if (tuplet) {
-      if (tuplet.tupletNotes[tuplet.tupletNotes.length - 1] === note) {
-        currentPos += tuplet.realDuration;
-      }
+
+      const isLastInTuplet = index === count;
+      if (isLastInTuplet) currentPos += totalTupletDuration;
+
     } else {
       currentPos += getNoteDuration(note);
     }
   }
 
-  let notes = voice.unprocessedNotes;
-  let tuplets = [];
-  let tupletNotes = [];
+  // Prepend a rest of the shift duration
+  const shiftedNotes = [new UnprocessedNote(["Rest"], 4, distance), ...voice.unprocessedNotes];
 
-  for (let note of voice.unprocessedNotes){
-    let originalTuplet = findTuplet(note, voice);
-    if (originalTuplet){
-      tupletNotes.push(note);
-      if (tupletNotes.length == originalTuplet.tupletInfo[0]) {
-        tuplets.push({
-          tupletNotes: tupletNotes,
-          tupletInfo: [...originalTuplet.tupletInfo],
-          realDuration: originalTuplet.realDuration
-        });
-        tupletNotes = [];
+  // Calculate total duration of shifted notes
+  let totalDur = 0;
+  for (const note of shiftedNotes) {
+    if (note.tupletInfo) {
+      const isLastInTuplet = note.tupletInfo.index === note.tupletInfo.count;
+      if (isLastInTuplet) totalDur += note.tupletInfo.totalTupletDuration;
+    } else {
+      totalDur += getNoteDuration(note);
+    }
+  }
+  totalDur = round(totalDur);
+
+  // Fill any remaining space in the last measure with rests
+  const remainder = round(measureLength - (totalDur % measureLength));
+  const lastMeasureIsIncomplete = remainder > 0 && remainder < measureLength;
+
+  if (lastMeasureIsIncomplete) {
+    const durationsLargestFirst = Object.entries(durationMapping).sort((a, b) => b[1] - a[1]);
+    let remaining = remainder;
+
+    while (remaining > 1e-9) {
+      for (const [durStr, durVal] of durationsLargestFirst) {
+        if (durVal <= remaining + 1e-9) {
+          shiftedNotes.push(new UnprocessedNote(["Rest"], 4, durStr));
+          remaining = round(remaining - durVal);
+          break;
+        }
       }
     }
   }
 
   resetPart(voice);
-  for (let tuplet of tuplets) voice.tuplets.push(tuplet);
-  addNote(voice, new UnprocessedNote(['Rest'], 4, distance));
-  for (let note of notes) addNote(voice, note);
-  drawNotes(voice);
+  processNotes(voice, shiftedNotes);
 }
 
 function transposeVoice(voice, scaleDegreeDifference) {
-  let transposedNotes = [];
-  let tupletNotes = [];
-  let tuplets = [];
-  let transposedNote = null;
+  const transposedNotes = [];
 
   const rootNote = voice.scale?.[0];
   const scaleName = voice.scale?.[1];
   const rootIndex = noteMapping[rootNote];
   const scale = scalesMapping[scaleName];
 
-  let direction = "up"
-  if (scaleDegreeDifference < 0){
-    direction = "down"
-  }
-  
+  const direction = scaleDegreeDifference < 0 ? "down" : "up";
 
-  for (let note of voice.unprocessedNotes){
+  for (let note of voice.unprocessedNotes) {
+    let transposedNote;
+
     if (note.isRest) {
-      transposedNote = note;
-    }
-    else{
-      const noteName = note.noteName
+      transposedNote = new UnprocessedNote("Rest", note.octave, getDurationString(note));
+    } 
+    else {
       const noteOctave = note.octave;
-      const noteIndex = noteMapping[noteName];
-      let originalInterval = (noteIndex + 12 - rootIndex) % 12;
-      let originalScaleDegree = scale.indexOf(originalInterval);
-      let newScaleDegree = (originalScaleDegree + scaleDegreeDifference + scale.length) % scale.length;
-      let newInterval = scale[newScaleDegree];
+      const noteIndex = noteMapping[note.noteName[0]];
 
-      // Transpose down by interval
-      let transposedIndex = (rootIndex + newInterval) % 12;
-      // Find pitch name
-      let transposedPitch = Object.keys(noteMapping).find(key => noteMapping[key] === transposedIndex);
-      // Adjust octave if the transposition crosses a boundary
-      const originalPitchIndex = noteMapping[noteName] + 12*noteOctave;
-      const transposedPitchIndex = noteMapping[transposedPitch] + 12*noteOctave;
-      let newOctave = parseInt(noteOctave);
-      if (originalPitchIndex <= transposedPitchIndex && direction == "down") {
+      const originalInterval = (noteIndex + 12 - rootIndex) % 12;
+      const originalScaleDegree = scale.indexOf(originalInterval);
+
+      const newScaleDegree =
+        (originalScaleDegree + scaleDegreeDifference + scale.length) % scale.length;
+
+      const newInterval = scale[newScaleDegree];
+      const transposedIndex = (rootIndex + newInterval) % 12;
+
+      const transposedPitch = Object.keys(noteMapping)
+        .find(key => noteMapping[key] === transposedIndex);
+
+      const originalAbs = noteIndex + 12 * noteOctave;
+      let newOctave = noteOctave;
+      let transposedAbs = noteMapping[transposedPitch] + 12 * newOctave;
+
+      if (originalAbs <= transposedAbs && direction === "down") {
         newOctave -= 1;
       }
-
-      else if (originalPitchIndex >= transposedPitchIndex && direction == "up") {
+      else if (originalAbs >= transposedAbs && direction === "up") {
         newOctave += 1;
       }
 
-      let noteIdx = pitchIndex(noteName + noteOctave);
+      let newIdx = pitchIndex(transposedPitch + newOctave);
       const minIdx = pitchIndex(voice.pitchRange[0]);
       const maxIdx = pitchIndex(voice.pitchRange[1]);
-      if (noteIdx < minIdx) {
-        newOctave += Math.ceil((minIdx - noteIdx) / 12);
+
+      if (newIdx < minIdx) {
+        newOctave += Math.ceil((minIdx - newIdx) / 12);
+      } 
+      else if (newIdx > maxIdx) {
+        newOctave -= Math.ceil((newIdx - maxIdx) / 12);
       }
-      else if (noteIdx > maxIdx) {
-        newOctave -= Math.ceil((noteIdx - maxIdx) / 12);
-      }
-      transposedNote = new UnprocessedNote(transposedPitch, newOctave, getDurationString(note));
+
+      transposedNote = new UnprocessedNote(
+        transposedPitch,
+        newOctave,
+        getDurationString(note)
+      );
     }
+
+    if (note.tupletInfo) transposedNote.tupletInfo = { ...note.tupletInfo };
 
     transposedNotes.push(transposedNote);
-
-    let originalTuplet = findTuplet(note, voice);
-    if (originalTuplet){
-      tupletNotes.push(transposedNote);
-      if (tupletNotes.length == originalTuplet.tupletInfo[0]) {
-        tuplets.push({
-          tupletNotes: tupletNotes,
-          tupletInfo: [...originalTuplet.tupletInfo],
-          realDuration: originalTuplet.realDuration
-        });
-        tupletNotes = [];
-      }
-    }
   }
 
   resetPart(voice);
-
-  for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-  for (let note of transposedNotes){
-    addNote(voice, note);
-  }
-  drawNotes(voice);
+  processNotes(voice, transposedNotes);
 }
 
 function shuffleRhythm(voice) {
-  let rhythmNotes = [...voice.unprocessedNotes]; 
-  let pitchNotes = [...voice.unprocessedNotes];
-  let newNotes = [];
-  let tuplets = [];
-  let currentTupletNotes = [];
+  const pitches = [];
+  for (const note of voice.unprocessedNotes) {
+    pitches.push({ noteName: note.noteName, octave: note.octave, isRest: note.isRest });
+  }
 
-  let i = 0;
-  let j = 0;
+  // Collect rhythm groups — tuplets stay together as a single unit
+  const rhythmGroups = [];
+  const seenTupletIds = new Set();
 
-  while (newNotes.length < voice.unprocessedNotes.length){
-    let pitchNote = pitchNotes[i];
-    if (pitchNote.isRest){
-      noteName = ["Rest"];
-      noteOctave = 4;
-    }
-    else{
-      noteName = pitchNote.noteName;
-      noteOctave = pitchNote.octave;
-    }
-
-    j = Math.floor(Math.random() * rhythmNotes.length);
-    let rhythmNote = rhythmNotes[j];
-  
-    let currentTuplet = null;
-    currentTuplet = findTuplet(rhythmNote, voice);
-
-    if (currentTuplet){
-      let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
-      newNotes.push(newNote);
-      currentTupletNotes.push(newNote);
-      rhythmNotes.splice(j, 1);
-
-      while(currentTupletNotes.length < currentTuplet.tupletInfo[0]){
-        j = Math.floor(Math.random() * rhythmNotes.length);
-        let rhythmNote = rhythmNotes[j];
-        let foundTuplet = null;
-        foundTuplet = findTuplet(rhythmNote, voice);
-
-        if (foundTuplet == currentTuplet){
-          ++i;
-          let pitchNote = pitchNotes[i];
-          if (pitchNote.isRest){
-            noteName = "Rest";
-            noteOctave = 4;
+  for (const note of voice.unprocessedNotes) {
+    if (note.tupletInfo) {
+      const tupletId = note.tupletInfo.id;
+      if (!seenTupletIds.has(tupletId)) {
+        seenTupletIds.add(tupletId);
+        const tupletNotes = [];
+        for (const candidate of voice.unprocessedNotes) {
+          if (candidate.tupletInfo?.id === tupletId) {
+            tupletNotes.push(candidate);
           }
-          else{
-            noteName = pitchNote.noteName;
-            noteOctave = pitchNote.octave;
-          }
-          let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
-          newNotes.push(newNote);
-          currentTupletNotes.push(newNote);
-          rhythmNotes.splice(j, 1);
         }
+        rhythmGroups.push({ type: 'tuplet', notes: tupletNotes });
       }
-      tuplets.push({
-        tupletNotes: currentTupletNotes,
-        tupletInfo: [...currentTuplet.tupletInfo],
-        realDuration: currentTuplet.realDuration
-        });
-      currentTupletNotes = [];
+    } else {
+      rhythmGroups.push({ type: 'note', note });
     }
-    else{
-      let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
-      newNotes.push(newNote);
-      rhythmNotes.splice(j, 1);
+  }
+
+  // Shuffle rhythm groups
+  for (let i = rhythmGroups.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rhythmGroups[i], rhythmGroups[j]] = [rhythmGroups[j], rhythmGroups[i]];
+  }
+
+  // Assign pitches in original order to the shuffled rhythms
+  const newNotes = [];
+  let pitchIdx = 0;
+  let newTupletId = 0;
+
+  for (const group of rhythmGroups) {
+    if (group.type === 'note') {
+      const pitch = pitches[pitchIdx++];
+      newNotes.push(new UnprocessedNote(pitch.noteName, pitch.octave, getDurationString(group.note)));
+
+    } else {
+      ++newTupletId;
+      const firstNoteInfo = group.notes[0].tupletInfo;
+
+      for (let i = 0; i < group.notes.length; i++) {
+        const rhythmNote = group.notes[i];
+        const pitch = pitches[pitchIdx++];
+        const newNote = new UnprocessedNote(pitch.noteName, pitch.octave, rhythmNote.duration, rhythmNote.dotted);
+        newNote.setTuplet(newTupletId, firstNoteInfo.totalTupletDuration, [...firstNoteInfo.ratio], firstNoteInfo.count, i + 1);
+        newNotes.push(newNote);
       }
-      ++i;
     }
+  }
 
   resetPart(voice);
-
-  for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-  for (let note of newNotes){
-    addNote(voice, note);
-  }
-  drawNotes(voice);
+  processNotes(voice, newNotes);
 }
 
 function shuffleNotes(voice) {
-  let originalNotes = voice.unprocessedNotes;
-  let newNotes = [];
-  let tuplets = [];
-  let currentTupletNotes = [];
+  const groups = [];
+  const seenIds = new Set();
 
-  while (originalNotes.length != 0){
-    i = Math.floor(Math.random() * originalNotes.length);
-    let note = originalNotes[i];
-    let currentTuplet = null;
-    currentTuplet = findTuplet(note, voice);
-
-    if (currentTuplet){
-      newNotes.push(note);
-      currentTupletNotes.push(note);
-      originalNotes.splice(i, 1);
-
-      while(currentTupletNotes.length < currentTuplet.tupletInfo[0]){
-        i = Math.floor(Math.random() * originalNotes.length);
-        let note = originalNotes[i];
-        let foundTuplet = null;
-        foundTuplet = findTuplet(note, voice);
-
-        if (foundTuplet == currentTuplet){
-          newNotes.push(note);
-          currentTupletNotes.push(note);
-          originalNotes.splice(i, 1);
+  for (const note of voice.unprocessedNotes) {
+    if (note.tupletInfo) {
+      const { id } = note.tupletInfo;
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        const tupletNotes = [];
+        for (const candidate of voice.unprocessedNotes) {
+          if (candidate.tupletInfo?.id === id) {
+            tupletNotes.push(candidate);
+          }
         }
+        groups.push({ type: 'tuplet', notes: tupletNotes });
       }
-     
-      tuplets.push({
-        tupletNotes: currentTupletNotes,
-        tupletInfo: [...currentTuplet.tupletInfo],
-        realDuration: currentTuplet.realDuration
-        });
-      currentTupletNotes = [];
-    }
-    else{
-      newNotes.push(note);
-      originalNotes.splice(i, 1);
-      }
-    }
-
-    resetPart(voice);
-
-    for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-    for (let note of newNotes){
-      addNote(voice, note);
-    }
-    drawNotes(voice);
-}
-
-function shufflePitch(voice) {
-  let rhythmNotes = [...voice.unprocessedNotes]; 
-  let pitchNotes = [...voice.unprocessedNotes];
-
-  // Extract just the pitches (ignore rests here)
-  pitchNotes = pitchNotes.filter(n => !n.isRest);
-
-  // Shuffle pitches
-  for (let i = pitchNotes.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pitchNotes[i], pitchNotes[j]] = [pitchNotes[j], pitchNotes[i]];
-  }
-
-  let newNotes = [];
-  let tuplets = [];
-  let tupletNotes = [];
-  let pitchIndex = 0;
-
-  for (let rhythmNote of rhythmNotes) {
-    let noteName, noteOctave;
-
-    if (rhythmNote.isRest) {
-      // Keep it a rest, don't advance pitchIndex
-      noteName = ["Rest"];
-      noteOctave = 4;
     } else {
-      // Take the next available pitch
-      let pitchNote = pitchNotes[pitchIndex++];
-      noteName = pitchNote.noteName;
-      noteOctave = pitchNote.octave;
+      groups.push({ type: 'note', note });
     }
+  }
 
-    let newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
-    newNotes.push(newNote);
+  // Shuffle groups
+  for (let i = groups.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [groups[i], groups[j]] = [groups[j], groups[i]];
+  }
 
-    let originalTuplet = findTuplet(rhythmNote, voice);
-    if (originalTuplet) {
-      tupletNotes.push(newNote);
-      if (tupletNotes.length == originalTuplet.tupletInfo[0]) {
-        tuplets.push({
-          tupletNotes: tupletNotes,
-          tupletInfo: [...originalTuplet.tupletInfo],
-          realDuration: originalTuplet.realDuration
-        });
-        tupletNotes = [];
+  const newNotes = [];
+  let tupletId = 0;
+
+  for (const group of groups) {
+    if (group.type === 'note') {
+      newNotes.push(group.note);
+    } else {
+      ++tupletId;
+      const firstNoteInfo = group.notes[0].tupletInfo;
+
+      // Shuffle notes within the tuplet
+      const shuffled = [...group.notes];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+
+      for (let i = 0; i < shuffled.length; i++) {
+        const tupletNote = shuffled[i];
+        const newNote = new UnprocessedNote(tupletNote.noteName, tupletNote.octave, tupletNote.duration, tupletNote.dotted);
+        newNote.setTuplet(tupletId, firstNoteInfo.totalTupletDuration, [...firstNoteInfo.ratio], firstNoteInfo.count, i + 1);
+        newNotes.push(newNote);
       }
     }
   }
 
   resetPart(voice);
+  processNotes(voice, newNotes);
+}
 
-  for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
+function shufflePitch(voice) {
+  // Extract pitches from non-rest notes, keeping rests in place
+  const pitches = [];
+  for (const note of voice.unprocessedNotes) {
+    if (!note.isRest) {
+      pitches.push({ noteName: note.noteName, octave: note.octave });
+    }
   }
 
-  for (let note of newNotes) {
-    addNote(voice, note);
+  for (let i = pitches.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pitches[i], pitches[j]] = [pitches[j], pitches[i]];
   }
 
-  drawNotes(voice);
+  // Assign shuffled pitches back to notes, keeping rhythm and tuplet info intact
+  const newNotes = [];
+  let pitchIdx = 0;
+
+  for (const note of voice.unprocessedNotes) {
+    let newNote;
+
+    if (note.isRest) {
+      newNote = new UnprocessedNote(["Rest"], 4, note.duration, note.dotted);
+    } else {
+      const pitch = pitches[pitchIdx++];
+      newNote = new UnprocessedNote(pitch.noteName, pitch.octave, note.duration, note.dotted);
+    }
+
+    if (note.tupletInfo) newNote.tupletInfo = { ...note.tupletInfo };
+    newNotes.push(newNote);
+  }
+
+  resetPart(voice);
+  processNotes(voice, newNotes);
 }
 
 function changeRhythm(voice) {
-  let originalNotes = voice.unprocessedNotes;
-  let newNotes = [];
-  let currentDuration = 0;
+  const originalNotes = [...voice.unprocessedNotes];
+  if (!originalNotes.length) return;
+
   const durationKeys = Object.keys(durationMapping);
 
-  while (originalNotes.length != 0){
-    let note = originalNotes.shift()
-    const noteName = note.noteName;
-    const noteOctave = note.octave;
-    let durationStr = durationKeys[Math.floor(Math.random() * durationKeys.length)];
+  // Calculate the total duration to fill
+  let targetDuration = 0;
+  for (const note of originalNotes) {
+    if (note.tupletInfo) {
+      const isLastInTuplet = note.tupletInfo.index === note.tupletInfo.count;
+      if (isLastInTuplet) targetDuration += note.tupletInfo.totalTupletDuration;
+    } else {
+      targetDuration += getNoteDuration(note);
+    }
+  }
+  targetDuration = round(targetDuration);
 
-    currentDuration += durationMapping[durationStr];
-    newNotes.push(new UnprocessedNote(noteName, noteOctave, durationStr));
+  let newNotes = [];
+  let success = false;
+
+  // Keep retrying until a valid rhythm that fits within measure boundaries is found
+  while (!success) {
+    newNotes = [];
+    let currentDuration = 0;
+    success = true;
+
+    for (let i = 0; i < originalNotes.length - 1; i++) {
+      const note = originalNotes[i];
+      const remaining = round(targetDuration - currentDuration);
+      const notesLeft = originalNotes.length - i - 1;
+      const minReserve = round(voice.rhythmRange[0] * notesLeft);
+      const posInMeasure = round(currentDuration % measureLength);
+      const spaceInMeasure = round(measureLength - posInMeasure);
+
+      const fittingDurations = durationKeys.filter(key => {
+        const val = durationMapping[key];
+        const leftover = round(remaining - val);
+        const shorterThanRemaining = val < remaining - 1e-9;
+        const leavesRoomForRemainingNotes = leftover >= minReserve - 1e-9;
+        const fitsBeforeBarline = round(val) <= round(spaceInMeasure);
+        return shorterThanRemaining && leavesRoomForRemainingNotes && fitsBeforeBarline;
+      });
+
+      if (fittingDurations.length === 0) {
+        // No valid duration exists for this position — restart entirely
+        success = false;
+        break;
+      }
+
+      const randomDur = fittingDurations[Math.floor(Math.random() * fittingDurations.length)];
+      newNotes.push(new UnprocessedNote(note.noteName, note.octave, randomDur));
+      currentDuration = round(currentDuration + durationMapping[randomDur]);
     }
 
-    resetPart(voice);
+    if (!success) continue;
 
-    for (let note of newNotes){
-      addNote(voice, note);
+    // Last note fills exactly whatever duration remains
+    const lastNote = originalNotes[originalNotes.length - 1];
+    const lastRemaining = round(targetDuration - currentDuration);
+    const posInMeasure = round(currentDuration % measureLength);
+    const spaceInMeasure = round(measureLength - posInMeasure);
+
+    // Last note must also fit before the barline
+    const lastDurStr = getDurationKeyFromValue(lastRemaining);
+    if (!lastDurStr || round(lastRemaining) > round(spaceInMeasure)) {
+      success = false;
+      continue;
     }
-    drawNotes(voice);
+
+    newNotes.push(new UnprocessedNote(lastNote.noteName, lastNote.octave, lastDurStr));
+  }
+
+  resetPart(voice);
+  processNotes(voice, newNotes);
 }
 
 function changePitch(voice) {
-  let rhythmNotes = [...voice.unprocessedNotes]; 
-  let newNotes = [];
-  let tuplets = [];
-  let tupletNotes = [];
-  let newNote = null;
   totalDuration = 0;
 
-  for (let rhythmNote of rhythmNotes){
-    if(rhythmNote.isRest){
-      newNote = new UnprocessedNote(["Rest"], 4, getDurationString(rhythmNote));;
+  const newNotes = voice.unprocessedNotes.map(note => {
+    let newNote;
+    if (note.isRest) {
+      newNote = new UnprocessedNote(["Rest"], 4, note.duration, note.dotted);
+    } else {
+      const [noteName, octave] = randomPitchFromScale(voice, getNoteDuration(note), false);
+      newNote = new UnprocessedNote(noteName, octave, note.duration, note.dotted);
     }
 
-    else{
-      let [noteName, noteOctave] = randomPitchFromScale(voice, getNoteDuration(rhythmNote), false);
-      newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(rhythmNote));
-    }
+    if (note.tupletInfo) newNote.tupletInfo = { ...note.tupletInfo };
 
-    newNotes.push(newNote);
-    totalDuration += getNoteDuration(rhythmNote);
+    totalDuration += note.tupletInfo
+      ? note.tupletInfo.totalTupletDuration / note.tupletInfo.count
+      : getNoteDuration(note);
 
-    let originalTuplet = findTuplet(rhythmNote, voice);
-    if (originalTuplet){
-      tupletNotes.push(newNote);
-      totalDuration +=  (getNoteDuration(rhythmNote) * 2 / originalTuplet.tupletInfo[0]) - getNoteDuration(rhythmNote);
-      if (tupletNotes.length == originalTuplet.tupletInfo[0]) {
-        tuplets.push({
-          tupletNotes: tupletNotes,
-          tupletInfo: [...originalTuplet.tupletInfo],
-          realDuration: originalTuplet.realDuration
-        });
-        tupletNotes = [];
-      }
-    }
-  }
+    return newNote;
+  });
 
-    resetPart(voice);
-
-    for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-    for (let note of newNotes){
-      addNote(voice, note);
-    }
-    drawNotes(voice);
+  resetPart(voice);
+  processNotes(voice, newNotes);
 }
 
 //  Develop   /////////////////////////
 
 function simplifyVoice(voice) {
-  let currentNotes = [...voice.unprocessedNotes]; 
-  let currentTupletNotes = [];
-  let tuplets = [];
-  let simplifiedNotes = [];
+  const currentNotes = [...voice.unprocessedNotes];
+  const simplifiedNotes = [];
+  let i = 0;
 
-  for (let i = 0; i < currentNotes.length; ++i) {
-    let beginningNote = currentNotes[i];
+  while (i < currentNotes.length) {
+    const note = currentNotes[i];
 
-    let originalTuplet = findTuplet(beginningNote, voice);
-
-    if (originalTuplet){
-      currentTupletNotes.push(beginningNote);   
-
-      if (currentTupletNotes.length == originalTuplet.tupletInfo[0]){
-        let newTupletLength = Math.min(5, 2 + Math.floor(Math.random() * (originalTuplet.tupletInfo[0] - 2)));
-
-        while (currentTupletNotes.length > newTupletLength){
-          let idx = Math.floor(Math.random() * currentTupletNotes.length);
-          currentTupletNotes.splice(idx, 1);
-        }
-    
-        if (currentTupletNotes.length % 2 === 1){
-          simplifiedNotes.push(...currentTupletNotes);
-
-          tuplets.push({
-            tupletNotes: currentTupletNotes,
-            tupletInfo: [currentTupletNotes.length, originalTuplet.tupletInfo[1]],
-            realDuration: originalTuplet.realDuration
-          });
-        }
-
-        else{
-          let newDuration = Object.keys(durationMapping).find(k => Math.abs(durationMapping[k] - (originalTuplet.realDuration / currentTupletNotes.length)) < 1e-6);
-          for (note of currentTupletNotes){
-            let noteName = note.noteName;
-            let noteOctave = note.octave;
-            let newNote = new UnprocessedNote(noteName, noteOctave, newDuration);
-            simplifiedNotes.push(newNote);
-          }
-        }
-        currentTupletNotes = [];
+    if (note.tupletInfo) {
+      // Collect all notes belonging to this tuplet
+      const id = note.tupletInfo.id;
+      const tupletNotes = [];
+      while (i < currentNotes.length && currentNotes[i].tupletInfo?.id === id) {
+        tupletNotes.push(currentNotes[i]);
+        i++;
       }
-    }
 
-    else{
-      let noteName = beginningNote.noteName;
-      let noteOctave = beginningNote.octave;
-      let combinedDuration = getNoteDuration(beginningNote);
+      const { totalTupletDuration, ratio } = tupletNotes[0].tupletInfo;
+      const [count, notesOccupied] = ratio;
+
+      // Reduce tuplet size randomly
+      let kept = [...tupletNotes];
+      const target = Math.max(3, 2 + Math.floor(Math.random() * (kept.length - 2)));
+      while (kept.length > target) {
+        kept.splice(Math.floor(Math.random() * kept.length), 1);
+      }
+
+      if (kept.length % 2 === 1) {
+        // Keep as tuplet with new count
+        for (let idx = 0; idx < kept.length; idx++) {
+          const keptNote = kept[idx];
+          const newNote = new UnprocessedNote(keptNote.noteName, keptNote.octave, keptNote.duration, keptNote.dotted);
+          newNote.setTuplet(id, totalTupletDuration, [kept.length, notesOccupied], kept.length, idx + 1);
+          simplifiedNotes.push(newNote);
+        }
+      } else {
+        // Dissolve into regular notes
+        const perNote = totalTupletDuration / kept.length;
+        const durStr = getDurationKeyFromValue(perNote) ?? "q";
+        for (const keptNote of kept) {
+          simplifiedNotes.push(new UnprocessedNote(keptNote.noteName, keptNote.octave, durStr));
+        }
+      }
+
+    } else {
+      // Try combining with subsequent non-tuplet notes
+      const noteName = note.noteName;
+      const noteOctave = note.octave;
+      let combinedDuration = round(getNoteDuration(note));
       let j = i + 1;
+      let merged = false;
 
       while (j < currentNotes.length) {
-         let originalTuplet = findTuplet(currentNotes[j], voice);
+        if (currentNotes[j].tupletInfo) break;
 
-        if (originalTuplet){
-          simplifiedNotes.push(beginningNote);
+        combinedDuration = round(combinedDuration + getNoteDuration(currentNotes[j]));
+
+        if (round(combinedDuration) !== round(measureLength) && getDurationKeyFromValue(combinedDuration) && Math.random() < 0.5) {
+          simplifiedNotes.push(new UnprocessedNote(noteName, noteOctave, getDurationKeyFromValue(combinedDuration)));
+          i = j + 1;
+          merged = true;
           break;
         }
-        combinedDuration += getNoteDuration(currentNotes[j]);
-
-        if (combinedDuration != measureLength && Object.values(durationMapping).includes(combinedDuration) && Math.random() < 0.5) {
-          let durationStr = Object.keys(durationMapping).find(
-            k => durationMapping[k] === combinedDuration
-          );
-
-          let combinedNote = new UnprocessedNote(noteName, noteOctave, durationStr);
-          simplifiedNotes.push(combinedNote);
-          i = j; 
-          break;
-        }
-
         j++;
       }
 
-      if (j >= currentNotes.length) {
-        simplifiedNotes.push(beginningNote);
+      if (!merged) {
+        simplifiedNotes.push(note);
+        i++;
       }
     }
   }
 
   resetPart(voice);
-
-  for (let tuplet of tuplets) {
-    voice.tuplets.push(tuplet);
-  }
-
-  for (let note of simplifiedNotes) {
-    addNote(voice, note);
-  }
-
-  drawNotes(voice);
+  processNotes(voice, simplifiedNotes);
 }
 
-function complicateVoice(voice){
-  let notes = [];
-  let seenTuplets = new Set();
+function complicateVoice(voice) {
+  const originalNotes = [...voice.unprocessedNotes];
+  const newNotes = [];
+  const seenIds = new Set();
 
-  for (let note of voice.unprocessedNotes){
-    let complicatedNotes = null;
-    let originalTuplet = findTuplet(note, voice);
-    if (originalTuplet){
-      if(!seenTuplets.has(originalTuplet)){
-        complicatedNotes = generatePhrase(voice, originalTuplet.realDuration, false);
-        seenTuplets.add(originalTuplet);
-      }
-      else{
-        continue;
-      }
-    }
-    
-    else if (getDurationString(note) != "32" && Math.random() < 0.5){
-      complicatedNotes = generatePhrase(voice, getNoteDuration(note), false);
-    }
-    else{
-      notes.push(note);
-    }
+  for (const note of originalNotes) {
+    if (note.tupletInfo) {
+      const { id, totalTupletDuration } = note.tupletInfo;
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
 
-    if (complicatedNotes != null){
-      for (let newNote of complicatedNotes){
-        if (newNote == complicatedNotes[0] || Math.random() < .3){
-          let noteName = note.noteName;
-          let noteOctave = note.octave;
-          newNote = new UnprocessedNote(noteName, noteOctave, getDurationString(newNote));
+      // Generate sub-phrase for the tuplet's real duration
+      const savedNotes = [...voice.unprocessedNotes];
+      const savedTuplets = [...voice.tuplets];
+      resetPart(voice);
+      generatePhrase(voice, totalTupletDuration, false);
+      const subNotes = [...voice.unprocessedNotes];
+
+      // Restore voice — complicateVoice will resetPart at the end
+      voice.unprocessedNotes = savedNotes;
+      voice.tuplets = savedTuplets;
+
+      subNotes.forEach((subNote, idx) => {
+        if (idx === 0 || Math.random() < 0.3) {
+          const newNote = new UnprocessedNote(note.noteName, note.octave, subNote.duration, subNote.dotted);
+          if (subNote.tupletInfo) newNote.tupletInfo = { ...subNote.tupletInfo };
+          newNotes.push(newNote);
+        } else {
+          newNotes.push(subNote);
         }
-        notes.push(newNote);
-      }
+      });
+
+    } else if (note.duration !== "32" && Math.random() < 0.5) {
+      const savedNotes = [...voice.unprocessedNotes];
+      const savedTuplets = [...voice.tuplets];
+      resetPart(voice);
+      generatePhrase(voice, getNoteDuration(note), false);
+      const subNotes = [...voice.unprocessedNotes];
+
+      voice.unprocessedNotes = savedNotes;
+      voice.tuplets = savedTuplets;
+
+      subNotes.forEach((subNote, idx) => {
+        if (idx === 0 || Math.random() < 0.3) {
+          const newNote = new UnprocessedNote(note.noteName, note.octave, subNote.duration, subNote.dotted);
+          if (subNote.tupletInfo) newNote.tupletInfo = { ...subNote.tupletInfo };
+          newNotes.push(newNote);
+        } else {
+          newNotes.push(subNote);
+        }
+      });
+
+    } else {
+      newNotes.push(note);
     }
   }
 
   resetPart(voice);
-  
-  for (let note of notes){
-    addNote(voice, note);
-  }
-  drawNotes(voice);
+  processNotes(voice, newNotes);
 }
 
-//  Play /////////////////////////
+// Audio /////////////////////////
 
 async function playAllParts(parts, button) {
   await Tone.start();
@@ -2015,8 +1922,6 @@ async function playAllParts(parts, button) {
   }, longestDuration * 1000);
 }
 
-// Audio /////////////////////////
-
 function staveNoteToToneJSNote(staveNote) {
   if (staveNote.isRest()) return null;
   return staveNote.getKeys().map(k => k.replace("/", "")); 
@@ -2043,118 +1948,79 @@ async function setupSampler() {
   await Tone.start(); 
 }
 
-//  Copy /////////////////////////
-
-function copyPart(part) {
-  clipboard.unprocessedNotes = [...part.unprocessedNotes];
-  clipboard.notes = [...part.notes];
-  clipboard.ties = [...part.ties];
-  clipboard.tuplets = [...part.tuplets];
-  clipboard.toneNotes = [...part.toneNotes];
-}
-
-function pastePart(part) {
-  part.unprocessedNotes = [...clipboard.unprocessedNotes];
-  part.notes = [...clipboard.notes];
-  part.ties = [...clipboard.ties];
-  part.tuplets = [...clipboard.tuplets];
-  part.toneNotes = [...clipboard.toneNotes];
-  drawNotes(part);
-}
-
 // Settings Functions ////////////////////////////////
 
-function generateHarmony(){
+function generateHarmony() {
   resetPart(harmonyVoice);
   const durationValues = Object.values(durationMapping);
-  let allowedDurations = [];
-  const noteValues = Object.values(noteMapping);
+  const noteValues = Object.values(noteMapping).filter(value => value < 12); // exclude Rest
   const chords = Object.values(chordMapping);
-  let chordNotes = [];
+  const allNotes = [];
   let currentDuration = 0;
 
-  for (let durationValue of durationValues){
-    if (durationValue % (1 / timeSignature[1]) == 0){
-      allowedDurations.push(durationValue);
-    }
-  }
-  
-  while (currentDuration < numMeasures * measureLength){
-    let duration = allowedDurations[Math.floor(Math.random() * allowedDurations.length)];
+  const allowedDurations = durationValues.filter(duration => round(duration % (1 / timeSignature[1])) === 0);
 
-    if ((duration + currentDuration % measureLength) > measureLength){
-      continue;
-    }
-    currentDuration += duration;
-    let rootNote = noteValues[Math.floor(Math.random() * noteValues.length)];
+  while (currentDuration < numMeasures * measureLength) {
+    const duration = allowedDurations[Math.floor(Math.random() * allowedDurations.length)];
 
-    let chord = chords[Math.floor(Math.random() * chords.length)];
+    if (round((currentDuration % measureLength) + duration) > measureLength) continue;
 
-    for (interval of chord){
-      let noteName = Object.keys(noteMapping).find(key => noteMapping[key] === ((rootNote + interval) % 12));
-      chordNotes.push(noteName);
-    }
+    const rootNote = noteValues[Math.floor(Math.random() * noteValues.length)];
+    const chord = chords[Math.floor(Math.random() * chords.length)];
+
+    const chordNotes = chord.map(interval =>
+      Object.keys(noteMapping).find(key => noteMapping[key] === ((rootNote + interval) % 12))
+    );
+
     let durationStr = Object.keys(durationMapping).find(key => durationMapping[key] === duration);
     let isDotted = false;
     if (durationStr.includes("d")) {
-          durationStr = durationStr.replace("d", "");
-          isDotted = true;
-        }
+      durationStr = durationStr.replace("d", "");
+      isDotted = true;
+    }
 
-    addNote(harmonyVoice, new UnprocessedNote(chordNotes, 4, durationStr, isDotted));
-    chordNotes = [];
+    allNotes.push(new UnprocessedNote(chordNotes, 4, durationStr, isDotted));
+    currentDuration = round(currentDuration + duration);
   }
-  drawNotes(harmonyVoice);
-}
 
-// Helper Functions   //////////////////
-
-function compressOctave(notename, noteOctave){
-  let noteIdx = pitchIndex(notename + noteOctave);
-  const minIdx = pitchIndex(voice.pitchRange[0]);
-  const maxIdx = pitchIndex(voice.pitchRange[1]);
-  if (noteIdx < minIdx) {
-    noteOctave += Math.ceil((minIdx - noteIdx) / 12);
-  }
-  else if (noteIdx > maxIdx) {
-    noteOctave -= Math.ceil((noteIdx - maxIdx) / 12);
-  }
-  return noteOctave;
+  processNotes(harmonyVoice, allNotes, true);
 }
 
 // Export  //////////////////
 
 function exportVoiceToMidi(voice) {
-    const midi = new Midi();
-    const track = midi.addTrack();
-    filename = 'voice.mid'
+  const midi = new Midi();
+  const track = midi.addTrack();
+  const filename = `${voice.name}.mid`;
+  let currentTime = 0;
 
-    let currentTime = 0; 
+  for (const note of voice.unprocessedNotes) {
+    const noteDurationInSeconds = getNoteDurationInSeconds(voice, note);
 
-    for (let note of voice.unprocessedNotes) {
-        if (note.isRest && note.isRest()) {
-            currentTime += getNoteDurationInSeconds(voice, note); 
-            continue;
-        }
-
-        const [name, octave] = note.getKeys()[0].split('/');
-        track.addNote({
-            name: name + octave,
-            time: currentTime,
-            duration: getNoteDurationInSeconds(voice, note)
-        });
-
-        currentTime += getNoteDurationInSeconds(voice, note);
+    if (note.isRest) {
+      currentTime += noteDurationInSeconds;
+      continue;
     }
 
-    const midiData = midi.toArray();
-    const blob = new Blob([midiData], { type: 'audio/midi' });
-    const url = URL.createObjectURL(blob);
+    for (const noteName of note.noteName) {
+      track.addNote({
+        name: noteName + note.octave,
+        time: currentTime,
+        duration: noteDurationInSeconds
+      });
+    }
 
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
+    currentTime += noteDurationInSeconds;
+  }
+
+  const midiData = midi.toArray();
+  const blob = new Blob([midiData], { type: 'audio/midi' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function exportVoiceToMusicXML(voice) {
@@ -2173,54 +2039,44 @@ function exportVoiceToMusicXML(voice) {
       <attributes>
         <divisions>${DIVS_PER_QUARTER}</divisions>
         <time>
-          <beats>4</beats>
-          <beat-type>4</beat-type>
+          <beats>${timeSignature[0]}</beats>
+          <beat-type>${timeSignature[1]}</beat-type>
         </time>
         <clef>
           <sign>G</sign>
           <line>2</line>
         </clef>
-      </attributes>
-`;
-
-  let currentTupletID = 1;
+      </attributes>\n`;
 
   for (const note of voice.unprocessedNotes) {
-    let fracWhole = getNoteDuration(note);
-    let isDotted = note.dotted || false;
-    let baseFrac = isDotted ? fracWhole / 1.5 : fracWhole;
-
-    let durationDivs = Math.round(fracWhole * DIVS_PER_WHOLE);
+    const durationDivs = Math.round(getNoteDuration(note) * DIVS_PER_WHOLE);
 
     xml += `<note>\n`;
 
-    if (note.isRest()) {
+    if (note.isRest) {
       xml += `  <rest/>\n`;
     } else {
-      const [pitch, octave] = note.getKeys()[0].split("/");
-      let step = pitch[0].toUpperCase();
-      let alter = pitch.includes("#") ? 1 : pitch.includes("b") ? -1 : null;
+      for (const noteName of note.noteName) {
+        const step = noteName[0].toUpperCase();
+        const hasFlat  = noteName.includes("b");
+        const hasSharp = noteName.includes("#");
 
-      xml += `  <pitch>
-    <step>${step}</step>
-`;
-      if (alter !== null) xml += `    <alter>${alter}</alter>\n`;
-      xml += `    <octave>${octave}</octave>
-  </pitch>\n`;
+        xml += `  <pitch>\n`;
+        xml += `    <step>${step}</step>\n`;
+        if (hasFlat)  xml += `    <alter>-1</alter>\n`;
+        if (hasSharp) xml += `    <alter>1</alter>\n`;
+        xml += `    <octave>${note.octave}</octave>\n`;
+        xml += `  </pitch>\n`;
+      }
     }
 
     xml += `  <duration>${durationDivs}</duration>\n`;
     xml += `</note>\n`;
   }
 
-  xml += `    </measure>
-  </part>
-</score-partwise>`;
+  xml += `    </measure>\n  </part>\n</score-partwise>`;
 
-  const blob = new Blob([xml], {
-    type: "application/vnd.recordare.musicxml+xml"
-  });
-
+  const blob = new Blob([xml], { type: "application/vnd.recordare.musicxml+xml" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -2230,5 +2086,4 @@ function exportVoiceToMusicXML(voice) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-
 

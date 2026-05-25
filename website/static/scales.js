@@ -218,3 +218,43 @@ function findScales(selectedNotes) {
     // Display the found scales
     displayFoundScales(foundScales);
 }
+
+function arraysEqual(a, b) {
+  if (a.length !== b.length) return false;
+
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+// normalize a scale into a consistent sorted representation
+function normalize(scale) {
+  return [...scale].sort((a, b) => a - b);
+}
+
+// check if two scales are transposition equivalents
+function isTranspositionDuplicate(scale, seen) {
+  let sorted = normalize(scale);
+
+  for (let key of seen.keys()) {
+    let existing = key.split(",").map(Number);
+
+    for (let t = 0; t < 12; t++) {
+      let transposed = [];
+
+      for (let i = 0; i < existing.length; i++) {
+        transposed[i] = (existing[i] + t) % 12;
+      }
+
+      transposed.sort((a, b) => a - b);
+
+      if (arraysEqual(transposed, sorted)) {
+        console.log("Transposition Duplicate", existing);
+        return true;
+      }
+    }
+  }
+
+  return false;
+}

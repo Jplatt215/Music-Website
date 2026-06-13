@@ -4,4 +4,3 @@ instance/
 *.pyc
 node_modules/
 .env
-website/static/js/*.js.map

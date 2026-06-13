@@ -34,6 +34,34 @@ function getCompositionData() {
     }
     return { timeSignature, numMeasures, mode, voices: voiceData };
 }
+function loadCompositionData(data) {
+    timeSignature = data.timeSignature;
+    numMeasures = data.numMeasures;
+    mode = data.mode;
+    measureLength = timeSignature[0] / timeSignature[1];
+    // Sync UI dropdowns to loaded values
+    topSelect.value = String(timeSignature[0]);
+    bottomSelect.value = String(timeSignature[1]);
+    numMeasuresSelect.value = String(numMeasures);
+    modeSelect.value = mode;
+    for (const voiceName of [...voices, 'harmonyVoice']) {
+        const voice = voicesMap[voiceName];
+        const saved = data.voices[voiceName];
+        if (!saved)
+            continue;
+        voice.pitchRange = saved.pitchRange;
+        voice.rhythmRange = saved.rhythmRange;
+        voice.scale = saved.scale;
+        resetPart(voice);
+        const notes = saved.notes.map((n) => {
+            const note = new UnprocessedNote(n.noteName, n.octave, n.duration, n.dotted);
+            if (n.tupletInfo)
+                note.tupletInfo = { ...n.tupletInfo };
+            return note;
+        });
+        processNotes(voice, notes, voiceName === 'harmonyVoice');
+    }
+}
 async function loadCompositionList() {
     const res = await fetch('/api/compositions');
     const compositions = await res.json();

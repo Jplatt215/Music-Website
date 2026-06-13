@@ -209,3 +209,164 @@ def delete_composition():
         db.session.commit()
         return jsonify({'success': True})
     return jsonify({'success': False, 'message': 'Composition not found'})
+
+
+
+#################
+
+
+from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
+from .models import User, Composer, Composition, UserComposition
+from . import db
+from flask_login import current_user, login_user, logout_user, login_required
+from werkzeug.security import generate_password_hash, check_password_hash
+import httpx
+import yt_dlp
+
+# ... existing routes stay the same, add these:
+
+@routes.route('/api/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    if not username or not email or not password:
+        return jsonify({'success': False, 'message': 'All fields are required'}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({'success': False, 'message': 'Email already registered'}), 400
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({'success': False, 'message': 'Username already taken'}), 400
+
+    if len(password) < 6:
+        return jsonify({'success': False, 'message': 'Password must be at least 6 characters'}), 400
+
+    new_user = User(
+        username=username,
+        email=email,
+        password=generate_password_hash(password)
+    )
+    db.session.add(new_user)
+    db.session.commit()
+    login_user(new_user)
+    return jsonify({'success': True, 'username': new_user.username})
+
+
+@routes.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not check_password_hash(user.password, password):
+        return jsonify({'success': False, 'message': 'Invalid email or password'}), 401
+
+    login_user(user)
+    return jsonify({'success': True, 'username': user.username})
+
+
+@routes.route('/api/logout', methods=['POST'])
+def logout():
+    logout_user()
+    return jsonify({'success': True})
+
+
+@routes.route('/api/me', methods=['GET'])
+def me():
+    if current_user.is_authenticated:
+        return jsonify({'loggedIn': True, 'username': current_user.username})
+    return jsonify({'loggedIn': False})
+
+
+# Composition routes
+@routes.route('/api/compositions', methods=['GET'])
+@login_required
+def get_compositions():
+    compositions = UserComposition.query.filter_by(user_id=current_user.id).order_by(UserComposition.updated_at.desc()).all()
+    return jsonify([{
+        'id': c.id,
+        'title': c.title,
+        'slug': c.slug,
+        'is_public': c.is_public,
+        'updated_at': c.updated_at.isoformat()
+    } for c in compositions])
+
+
+@routes.route('/api/compositions', methods=['POST'])
+@login_required
+def save_composition():
+    data = request.get_json()
+    title = data.get('title', '').strip()
+    is_public = data.get('is_public', False)
+    composition_data = data.get('data')
+
+    if not title or not composition_data:
+        return jsonify({'success': False, 'message': 'Title and data are required'}), 400
+
+    new_composition = UserComposition(
+        user_id=current_user.id,
+        title=title,
+        is_public=is_public,
+        data=composition_data
+    )
+    db.session.add(new_composition)
+    db.session.commit()
+    return jsonify({'success': True, 'slug': new_composition.slug, 'id': new_composition.id})
+
+
+@routes.route('/api/compositions/<slug>', methods=['PUT'])
+@login_required
+def update_composition(slug):
+    composition = UserComposition.query.filter_by(slug=slug, user_id=current_user.id).first()
+    if not composition:
+        return jsonify({'success': False, 'message': 'Composition not found'}), 404
+
+    data = request.get_json()
+    if 'title' in data:
+        composition.title = data['title'].strip()
+    if 'is_public' in data:
+        composition.is_public = data['is_public']
+    if 'data' in data:
+        composition.data = data['data']
+    composition.updated_at = datetime.utcnow()
+
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@routes.route('/api/compositions/<slug>', methods=['GET'])
+def get_composition(slug):
+    composition = UserComposition.query.filter_by(slug=slug).first()
+    if not composition:
+        return jsonify({'success': False, 'message': 'Composition not found'}), 404
+    if not composition.is_public and (not current_user.is_authenticated or current_user.id != composition.user_id):
+        return jsonify({'success': False, 'message': 'Private composition'}), 403
+
+    return jsonify({
+        'success': True,
+        'title': composition.title,
+        'slug': composition.slug,
+        'is_public': composition.is_public,
+        'owner': composition.user.username,
+        'data': composition.data
+    })
+
+
+@routes.route('/api/compositions/<slug>', methods=['DELETE'])
+@login_required
+def delete_user_composition(slug):
+    composition = UserComposition.query.filter_by(slug=slug, user_id=current_user.id).first()
+    if not composition:
+        return jsonify({'success': False, 'message': 'Composition not found'}), 404
+    db.session.delete(composition)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@routes.route('/compositions/<slug>', methods=['GET'])
+def view_composition(slug):
+    return render_template('composer.html', user=current_user, slug=slug)

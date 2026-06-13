@@ -9,6 +9,7 @@ def create_app():
     app = Flask(__name__)
 
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret")
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
 
     database_url = os.getenv("DATABASE_URL", "sqlite:///local.db")
 

@@ -4,27 +4,75 @@
 
 {% block content %}
 <head>
-  <!-- Link to the stylesheet -->
   <link rel="stylesheet" href="{{ url_for('static', filename='composer.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='global.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/tone@14.8.39/build/Tone.min.js"></script>
-  <script src="{{ url_for('static', filename='composer.js') }}" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.2/build/cjs/vexflow.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi"></script>
+  <script src="{{ url_for('static', filename='js/auth.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/composer.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/saveload.js') }}" defer></script>
 
-  <title>Automated Composition</title>
+<title>Automated Composition</title>
 </head>
 <body>
+  
   <div class="navbar-main">
     <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
     <a class="nav-item nav-link" id="scales" href="/scales">Scale Calculator</a>
     <a class="nav-item nav-link" id="composer" href="/composer">Automated Composition</a>
+
+    <!-- Auth section -->
+    <div class="nav-auth">
+      <!-- Shown when logged out -->
+      <button class="nav-btn" id="loginBtn">Login</button>
+
+      <!-- Shown when logged in -->
+      <div class="nav-user hidden" id="navUser">
+        <button class="nav-btn" id="userMenuBtn">
+          <span id="navUsername"></span> ▾
+        </button>
+        <div class="nav-dropdown hidden" id="userDropdown">
+          <hr class="dropdown-divider">
+          <button class="dropdown-item" id="logoutBtn">Log Out</button>
+        </div>
+      </div>
+    </div>
   </div>
+
+<!-- Auth Modal -->
+<div class="auth-overlay hidden" id="authModal">
+  <div class="auth-box">
+    <button class="auth-close" id="authModalClose">✕</button>
+
+    <div class="auth-tabs">
+  <button class="auth-tab active" data-tab-target="loginForm">Login</button>
+  <button class="auth-tab" data-tab-target="registerForm">Register</button>
+</div>
+
+    <div id="loginForm" class="auth-form">
+  <input type="email" id="loginEmail" placeholder="Email" class="auth-input" autocomplete="off" />
+  <input type="password" id="loginPassword" placeholder="Password" class="auth-input" autocomplete="new-password" />
+  <p class="auth-error hidden" id="loginError"></p>
+  <button class="auth-submit" id="loginSubmit">Login</button>
+</div>
+
+<div id="registerForm" class="auth-form hidden">
+  <input type="text" id="registerUsername" placeholder="Username" class="auth-input" autocomplete="off" />
+  <input type="email" id="registerEmail" placeholder="Email" class="auth-input" autocomplete="off" />
+  <input type="password" id="registerPassword" placeholder="Password" class="auth-input" autocomplete="new-password" />
+  <p class="auth-error hidden" id="registerError"></p>
+  <button class="auth-submit" id="registerSubmit">Register</button>
+</div>
+  </div>
+</div>
+
   <div class="header">
     <div class="menu">
       <!-- Tabs -->
       <div class="tabs">
         <button class="tab-btn active" data-target="input-menu">Create</button>
+        <button class="tab-btn" data-target="load-menu">Load</button>
         <button class="tab-btn" data-target="settings-menu">Settings</button>
       </div>
 
@@ -131,6 +179,39 @@
           <button class="nextButton">→</button>
         </div>
       </div>
+
+      <!-- Load Menu -->
+<div id="load-menu" class="tab-content hidden">
+  <div id="notLoggedInMsg" class="buttonDescription">
+    Log in to save and load compositions
+  </div>
+  <div id="loggedInLoad" class="hidden">
+
+    <!-- Current project -->
+    <div class="buttonDescription" style="margin-bottom: 4px;">
+      Current Project: <span id="currentCompositionTitle">Untitled</span>
+    </div>
+    <div class="row" style="margin-bottom: 8px;">
+      <button class="saveButton" style="width: 100%;">💾 Save</button>
+    </div>
+
+    <!-- Load bank -->
+    <div class="buttonDescription" style="margin-top: 8px;">Load</div>
+    <div id="compositionList" style="
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      background: white;
+    "></div>
+
+    <!-- Bottom actions -->
+    <div class="row" style="margin-top: 8px; gap: 4px;">
+      <button class="newCompositionButton" style="flex: 1;">+ New</button>
+      <button class="deleteCompositionButton" style="flex: 1; color: red;">🗑 Delete</button>
+    </div>
+
+  </div>
+</div>
 
       <!-- Settings Menu -->
       <div id="settings-menu" class="tab-content hidden">

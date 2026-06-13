@@ -35,6 +35,9 @@ document.querySelectorAll('.auth-tab').forEach(tab => {
         target?.classList.remove('hidden');
     });
 });
+loginBtn.addEventListener('click', () => {
+  authModal.classList.remove('hidden');
+});
 authModalClose.addEventListener('click', () => {
     authModal.classList.add('hidden');
     clearAuthForms();

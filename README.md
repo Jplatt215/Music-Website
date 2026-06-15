@@ -1,21 +1,37 @@
-# Automated Music Composition with VexFlow
-A web-based tool for generating, modifying, and playing polyphonic music phrases. Built with Flask, VexFlow, and Tone.js, this project demonstrates real-time music notation rendering and automated composition features.
+# Classical Music Composition Platform
 
-## Deployed at
+A full-stack web application for generating, modifying, and playing polyphonic classical music compositions. Built with Flask, TypeScript, VexFlow, and Tone.js, featuring real-time music notation rendering, algorithmic composition tools, user accounts, and persistent storage with shareable compositions.
+
+## Live Demo
 [https://josephplatt.dev/](https://josephplatt.dev/)
 
 ## Features
-* Generate musical phrases programmatically.
-* Modify phrases: reverse, reflect, shift, transpose, shuffle rhythm/pitch, simplify/complicate.
-* Multi-voice support: create and manipulate independent musical voices.
-* Real-time playback with adjustable tempo using Tone.js.
-* Exportable as MIDI or MusicXML.
 
-## Technologies
-* Frontend: HTML, CSS, JavaScript
-* Music Rendering: VexFlow
-* Audio Playback: Tone.js
-* Backend: Python, Flask
+### Composition Tools
+- Generate musical phrases algorithmically with configurable pitch range, rhythm constraints, and scale
+- 10+ compositional transformations: reverse, reflect, shift, transpose, shuffle rhythm/notes/pitch, simplify, complicate
+- Multi-voice support (4 independent voices) with custom tuplet rendering and barline-aware rhythm processing
+- Harmony mode for generating chord progressions
+- Undo/redo via per-voice memory history
+- Copy/paste between voices
+
+### Playback & Export
+- Real-time audio playback via Tone.js with full sampled piano and adjustable tempo
+- MIDI and MusicXML export for use with professional notation software
+
+### Accounts & Persistence
+- User registration and login with hashed passwords (Flask-Login, Werkzeug)
+- Save, load, and overwrite named compositions
+- Public and private compositions with shareable URLs
+- Autosave to browser storage for unsaved work
+
+## Tech Stack
+- **Frontend:** TypeScript, JavaScript, HTML, CSS
+- **Music Rendering:** VexFlow
+- **Audio Playback:** Tone.js
+- **Backend:** Python, Flask, SQLAlchemy
+- **Database:** PostgreSQL
+- **Deployment:** Railway
 
 ## Notes
-* This application uses yt-dlp to extract YouTube video titles for composer and composition parsing on the "Index" page. On cloud platforms (e.g., Render) yt-dlp may sometimes fail with an error like: "Sign in to confirm you’re not a bot". This limitation does not occur when running the project locally.
+This application uses yt-dlp to extract YouTube video titles for composer and composition parsing on the Music Index page. On some cloud platforms, yt-dlp may occasionally fail with a bot-detection error; this does not affect the composition features and does not occur when running locally.

@@ -5,6 +5,9 @@ A full-stack web application for generating, modifying, and playing polyphonic c
 ## Live Demo
 [https://josephplatt.dev/](https://josephplatt.dev/)
 
+## Video Demo
+[https://youtu.be/eu3sA4QGyCs](https://youtu.be/eu3sA4QGyCs)
+
 ## Features
 
 ### Composition Tools

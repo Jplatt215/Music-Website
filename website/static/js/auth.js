@@ -20,26 +20,36 @@ const registerSubmit = document.getElementById('registerSubmit');
 const loginError = document.getElementById('loginError');
 const registerError = document.getElementById('registerError');
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Helpers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+async function fetchJSON(url, options = {}) {
+    const res = await fetch(url, options);
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        throw new Error(`Server error (${res.status}). Please try again.`);
+    }
+    return res.json();
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Modal
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Switch between Login and Register tabs inside the modal
 document.querySelectorAll('.auth-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-        console.log('tab clicked', tab.dataset.tabTarget);
         document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         document.querySelectorAll('.auth-form').forEach(f => f.classList.add('hidden'));
         const targetId = tab.dataset.tabTarget;
         const target = document.getElementById(targetId);
-        console.log('target element:', target);
         target?.classList.remove('hidden');
     });
+});
+loginBtn.addEventListener('click', () => {
+    authModal.classList.remove('hidden');
 });
 authModalClose.addEventListener('click', () => {
     authModal.classList.add('hidden');
     clearAuthForms();
 });
-// Close modal when clicking outside of it
 authModal.addEventListener('click', (e) => {
     if (e.target === authModal) {
         authModal.classList.add('hidden');
@@ -62,7 +72,6 @@ userMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     userDropdown.classList.toggle('hidden');
 });
-// Close dropdown when clicking anywhere else
 document.addEventListener('click', (e) => {
     if (!navUser.contains(e.target)) {
         userDropdown.classList.add('hidden');
@@ -72,52 +81,91 @@ document.addEventListener('click', (e) => {
 // Login
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 loginSubmit.addEventListener('click', async () => {
-    const email = document.getElementById('loginEmail').value;
+    const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
     loginError.classList.add('hidden');
-    const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (data.success) {
-        onLogin(data.username);
-        authModal.classList.add('hidden');
-    }
-    else {
-        loginError.textContent = data.message;
+    if (!email || !password) {
+        loginError.textContent = 'Email and password are required.';
         loginError.classList.remove('hidden');
+        return;
+    }
+    loginSubmit.disabled = true;
+    loginSubmit.textContent = 'Logging in...';
+    try {
+        const data = await fetchJSON('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+        if (data.success) {
+            onLogin(data.username);
+            authModal.classList.add('hidden');
+            clearAuthForms();
+        }
+        else {
+            loginError.textContent = data.message || 'Login failed. Please try again.';
+            loginError.classList.remove('hidden');
+        }
+    }
+    catch (e) {
+        loginError.textContent = e.message || 'Network error. Please check your connection.';
+        loginError.classList.remove('hidden');
+    }
+    finally {
+        loginSubmit.disabled = false;
+        loginSubmit.textContent = 'Login';
     }
 });
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Register
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 registerSubmit.addEventListener('click', async () => {
-    const username = document.getElementById('registerUsername').value;
-    const email = document.getElementById('registerEmail').value;
+    const username = document.getElementById('registerUsername').value.trim();
+    const email = document.getElementById('registerEmail').value.trim();
     const password = document.getElementById('registerPassword').value;
     registerError.classList.add('hidden');
-    const res = await fetch('/api/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password }),
-    });
-    const data = await res.json();
-    if (data.success) {
-        onLogin(data.username);
-        authModal.classList.add('hidden');
-    }
-    else {
-        registerError.textContent = data.message;
+    if (!username || !email || !password) {
+        registerError.textContent = 'All fields are required.';
         registerError.classList.remove('hidden');
+        return;
+    }
+    registerSubmit.disabled = true;
+    registerSubmit.textContent = 'Registering...';
+    try {
+        const data = await fetchJSON('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email, password }),
+        });
+        if (data.success) {
+            onLogin(data.username);
+            authModal.classList.add('hidden');
+            clearAuthForms();
+        }
+        else {
+            registerError.textContent = data.message || 'Registration failed. Please try again.';
+            registerError.classList.remove('hidden');
+        }
+    }
+    catch (e) {
+        registerError.textContent = e.message || 'Network error. Please check your connection.';
+        registerError.classList.remove('hidden');
+    }
+    finally {
+        registerSubmit.disabled = false;
+        registerSubmit.textContent = 'Register';
     }
 });
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Logout
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 logoutBtn.addEventListener('click', async () => {
-    await fetch('/api/logout', { method: 'POST' });
+    try {
+        await fetch('/api/logout', { method: 'POST' });
+    }
+    catch (e) {
+        console.warn('Logout request failed:', e);
+    }
     isLoggedIn = false;
     currentSlug = null;
     currentTitle = null;
@@ -130,9 +178,10 @@ logoutBtn.addEventListener('click', async () => {
     loggedInLoad.classList.add('hidden');
     const currentCompositionTitle = document.getElementById('currentCompositionTitle');
     currentCompositionTitle.textContent = 'Untitled';
+    clearAuthForms();
 });
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// onLogin — called after successful login or register
+// onLogin
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 function onLogin(username) {
     isLoggedIn = true;
@@ -149,9 +198,13 @@ function onLogin(username) {
 // Check auth state on page load
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 async function checkAuth() {
-    const res = await fetch('/api/me');
-    const data = await res.json();
-    if (data.loggedIn)
-        onLogin(data.username);
+    try {
+        const data = await fetchJSON('/api/me');
+        if (data.loggedIn)
+            onLogin(data.username);
+    }
+    catch (e) {
+        console.warn('Auth check failed:', e);
+    }
 }
 checkAuth();

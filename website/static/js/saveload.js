@@ -13,6 +13,20 @@ const newCompositionButton = document.querySelector('.newCompositionButton');
 const compositionList = document.getElementById('compositionList');
 const currentCompositionTitle = document.getElementById('currentCompositionTitle');
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Helpers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+function showSaveError(message) {
+    const existing = document.getElementById('saveErrorMsg');
+    if (existing)
+        existing.remove();
+    const msg = document.createElement('p');
+    msg.id = 'saveErrorMsg';
+    msg.textContent = message;
+    msg.style.cssText = 'color: red; font-size: 12px; padding: 4px 0; margin: 0;';
+    compositionList.insertAdjacentElement('beforebegin', msg);
+    setTimeout(() => msg.remove(), 4000);
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Serialize / Deserialize
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 function getCompositionData() {
@@ -39,7 +53,6 @@ function loadCompositionData(data) {
     numMeasures = data.numMeasures;
     mode = data.mode;
     measureLength = timeSignature[0] / timeSignature[1];
-    // Sync UI dropdowns to loaded values
     topSelect.value = String(timeSignature[0]);
     bottomSelect.value = String(timeSignature[1]);
     numMeasuresSelect.value = String(numMeasures);
@@ -62,38 +75,85 @@ function loadCompositionData(data) {
         processNotes(voice, notes, voiceName === 'harmonyVoice');
     }
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Composition List
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 async function loadCompositionList() {
-    const res = await fetch('/api/compositions');
-    const compositions = await res.json();
-    compositionList.innerHTML = '';
-    if (!compositions.length) {
-        compositionList.innerHTML = '<p style="padding: 8px; font-size: 12px; color: #888;">No saved compositions</p>';
-        return;
-    }
-    for (const comp of compositions) {
-        const row = document.createElement('div');
-        row.style.cssText = 'padding: 6px 8px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-        row.textContent = (comp.is_public ? '🌐 ' : '🔒 ') + comp.title;
-        row.title = comp.title;
-        row.dataset.slug = comp.slug;
-        // Highlight if currently selected
-        if (comp.slug === currentSlug) {
-            row.style.backgroundColor = '#d3d3d3';
+    try {
+        const res = await fetch('/api/compositions');
+        if (!res.ok) {
+            compositionList.innerHTML = '<p style="padding: 8px; font-size: 12px; color: red;">Failed to load compositions.</p>';
+            return;
         }
-        row.addEventListener('click', () => {
-            // Autosave current before switching
-            saveToLocalStorage();
-            loadComposition(comp.slug, comp.title);
-            // Highlight selected row
-            compositionList.querySelectorAll('div').forEach(r => {
-                r.style.backgroundColor = '';
+        const compositions = await res.json();
+        compositionList.innerHTML = '';
+        if (!compositions.length) {
+            compositionList.innerHTML = '<p style="padding: 8px; font-size: 12px; color: #888;">No saved compositions</p>';
+            return;
+        }
+        for (const comp of compositions) {
+            const row = document.createElement('div');
+            row.style.cssText = 'padding: 6px 8px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+            row.textContent = (comp.is_public ? '🌐 ' : '🔒 ') + comp.title;
+            row.title = comp.title;
+            row.dataset.slug = comp.slug;
+            if (comp.slug === currentSlug) {
+                row.style.backgroundColor = '#d3d3d3';
+            }
+            row.addEventListener('click', () => {
+                saveToLocalStorage();
+                loadComposition(comp.slug, comp.title);
+                compositionList.querySelectorAll('div').forEach(r => {
+                    r.style.backgroundColor = '';
+                });
+                row.style.backgroundColor = '#d3d3d3';
             });
-            row.style.backgroundColor = '#d3d3d3';
-        });
-        compositionList.appendChild(row);
+            compositionList.appendChild(row);
+        }
+    }
+    catch (e) {
+        compositionList.innerHTML = '<p style="padding: 8px; font-size: 12px; color: red;">Network error. Could not load compositions.</p>';
     }
 }
-// Delete current project
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Load a Composition
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+async function loadComposition(slug, title) {
+    try {
+        const res = await fetch(`/api/compositions/${slug}`);
+        if (!res.ok) {
+            if (res.status === 404) {
+                showSaveError('Composition not found.');
+                localStorage.removeItem('composerCurrentSlug');
+                localStorage.removeItem('composerCurrentTitle');
+            }
+            else if (res.status === 403) {
+                showSaveError('This composition is private.');
+            }
+            else {
+                showSaveError('Failed to load composition. Please try again.');
+            }
+            return;
+        }
+        const data = await res.json();
+        if (!data.success) {
+            showSaveError(data.message || 'Failed to load composition.');
+            return;
+        }
+        loadCompositionData(data.data);
+        currentSlug = slug;
+        currentTitle = title || data.title;
+        currentCompositionTitle.textContent = currentTitle;
+        history.pushState({}, '', `/compositions/${slug}`);
+        saveToLocalStorage();
+    }
+    catch (e) {
+        showSaveError('Network error. Could not load composition.');
+    }
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Delete a Composition (button handler)
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const deleteCompositionButton = document.querySelector('.deleteCompositionButton');
 deleteCompositionButton?.addEventListener('click', async () => {
     if (!currentSlug) {
@@ -102,64 +162,51 @@ deleteCompositionButton?.addEventListener('click', async () => {
     }
     if (!confirm(`Delete "${currentTitle}"? This cannot be undone.`))
         return;
-    await fetch(`/api/compositions/${currentSlug}`, { method: 'DELETE' });
-    currentSlug = null;
-    currentTitle = null;
-    currentCompositionTitle.textContent = 'Untitled';
-    history.pushState({}, '', '/composer');
-    localStorage.removeItem('composerCurrentSlug');
-    localStorage.removeItem('composerCurrentTitle');
-    loadCompositionList();
-});
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Load a Composition
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-async function loadComposition(slug, title) {
-    const res = await fetch(`/api/compositions/${slug}`);
-    const data = await res.json();
-    if (!data.success)
-        return;
-    loadCompositionData(data.data);
-    currentSlug = slug;
-    currentTitle = title || data.title;
-    currentCompositionTitle.textContent = currentTitle;
-    history.pushState({}, '', `/compositions/${slug}`);
-    saveToLocalStorage();
-}
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Delete a Composition
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-async function deleteComposition(slug) {
-    if (!confirm('Delete this composition?'))
-        return;
-    await fetch(`/api/compositions/${slug}`, { method: 'DELETE' });
-    if (currentSlug === slug) {
+    try {
+        const res = await fetch(`/api/compositions/${currentSlug}`, { method: 'DELETE' });
+        if (!res.ok) {
+            showSaveError('Failed to delete composition. Please try again.');
+            return;
+        }
         currentSlug = null;
         currentTitle = null;
         currentCompositionTitle.textContent = 'Untitled';
         history.pushState({}, '', '/composer');
+        localStorage.removeItem('composerCurrentSlug');
+        localStorage.removeItem('composerCurrentTitle');
+        loadCompositionList();
     }
-    loadCompositionList();
-}
+    catch (e) {
+        showSaveError('Network error. Could not delete composition.');
+    }
+});
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Save Button
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 saveButton?.addEventListener('click', async () => {
     if (!isLoggedIn) {
-        // Prompt login if not authenticated
         const authModal = document.getElementById('authModal');
         authModal.classList.remove('hidden');
         return;
     }
     if (currentSlug) {
-        // Named composition — ask overwrite or save as new
         const overwrite = confirm(`Overwrite "${currentTitle}"?\n\nOK to overwrite — Cancel to save as new.`);
         if (overwrite) {
-            await fetch(`/api/compositions/${currentSlug}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data: getCompositionData() }),
-            });
+            try {
+                const res = await fetch(`/api/compositions/${currentSlug}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data: getCompositionData() }),
+                });
+                if (!res.ok) {
+                    showSaveError('Failed to save. Please try again.');
+                    return;
+                }
+            }
+            catch (e) {
+                showSaveError('Network error. Could not save composition.');
+                return;
+            }
         }
         else {
             await saveAsNew();
@@ -174,34 +221,45 @@ saveButton?.addEventListener('click', async () => {
 // Save as New
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 async function saveAsNew() {
-    // Build a default title that doesn't collide with existing ones
-    const listRes = await fetch('/api/compositions');
-    const existing = await listRes.json();
-    const existingTitles = existing.map((c) => c.title);
-    const baseName = currentTitle || 'Project';
-    let newTitle = baseName;
-    if (existingTitles.includes(newTitle)) {
-        let num = 2;
-        while (existingTitles.includes(`${baseName} (${num})`))
-            num++;
-        newTitle = `${baseName} (${num})`;
+    try {
+        const listRes = await fetch('/api/compositions');
+        const existing = listRes.ok ? await listRes.json() : [];
+        const existingTitles = existing.map((c) => c.title);
+        const baseName = currentTitle || 'Project';
+        let newTitle = baseName;
+        if (existingTitles.includes(newTitle)) {
+            let num = 2;
+            while (existingTitles.includes(`${baseName} (${num})`))
+                num++;
+            newTitle = `${baseName} (${num})`;
+        }
+        const title = prompt('Save as:', newTitle);
+        if (!title)
+            return;
+        const isPublic = confirm('Make this composition public?\n\nOK = public   Cancel = private');
+        const saveRes = await fetch('/api/compositions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, is_public: isPublic, data: getCompositionData() }),
+        });
+        if (!saveRes.ok) {
+            showSaveError('Failed to save. Please try again.');
+            return;
+        }
+        const data = await saveRes.json();
+        if (data.success) {
+            currentSlug = data.slug;
+            currentTitle = title;
+            currentCompositionTitle.textContent = title;
+            history.pushState({}, '', `/compositions/${data.slug}`);
+            saveToLocalStorage();
+        }
+        else {
+            showSaveError(data.message || 'Failed to save composition.');
+        }
     }
-    const title = prompt('Save as:', newTitle);
-    if (!title)
-        return;
-    const isPublic = confirm('Make this composition public?\n\nOK = public   Cancel = private');
-    const saveRes = await fetch('/api/compositions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, is_public: isPublic, data: getCompositionData() }),
-    });
-    const data = await saveRes.json();
-    if (data.success) {
-        currentSlug = data.slug;
-        currentTitle = title;
-        currentCompositionTitle.textContent = title;
-        history.pushState({}, '', `/compositions/${data.slug}`);
-        saveToLocalStorage();
+    catch (e) {
+        showSaveError('Network error. Could not save composition.');
     }
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -224,11 +282,16 @@ newCompositionButton?.addEventListener('click', () => {
 // Autosave to localStorage
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 function saveToLocalStorage() {
-    localStorage.setItem('composerAutosave', JSON.stringify(getCompositionData()));
-    if (currentSlug)
-        localStorage.setItem('composerCurrentSlug', currentSlug);
-    if (currentTitle)
-        localStorage.setItem('composerCurrentTitle', currentTitle);
+    try {
+        localStorage.setItem('composerAutosave', JSON.stringify(getCompositionData()));
+        if (currentSlug)
+            localStorage.setItem('composerCurrentSlug', currentSlug);
+        if (currentTitle)
+            localStorage.setItem('composerCurrentTitle', currentTitle);
+    }
+    catch (e) {
+        console.warn('Failed to autosave:', e);
+    }
 }
 function loadFromLocalStorage() {
     const saved = localStorage.getItem('composerAutosave');
@@ -246,14 +309,15 @@ function loadFromLocalStorage() {
     }
     catch (e) {
         console.warn('Failed to load autosave:', e);
+        localStorage.removeItem('composerAutosave');
+        localStorage.removeItem('composerCurrentSlug');
+        localStorage.removeItem('composerCurrentTitle');
     }
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Startup
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Restore last session from localStorage immediately
 loadFromLocalStorage();
-// If the URL contains a composition slug, load it from the server
 const urlSlug = window.location.pathname.match(/\/compositions\/([^/]+)/)?.[1];
 if (urlSlug) {
     loadComposition(urlSlug, '');

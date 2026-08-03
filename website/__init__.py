@@ -2,8 +2,11 @@ import os
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 db = SQLAlchemy()
+limiter = Limiter(key_func=get_remote_address)
 
 def create_app():
     app = Flask(__name__)
@@ -12,8 +15,6 @@ def create_app():
     app.config["TEMPLATES_AUTO_RELOAD"] = True
 
     database_url = os.getenv("DATABASE_URL", "sqlite:///local.db")
-
-    # Fix Render postgres:// issue
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
@@ -21,6 +22,7 @@ def create_app():
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     db.init_app(app)
+    limiter.init_app(app)
 
     from .routes import routes
     app.register_blueprint(routes)

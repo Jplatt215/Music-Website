@@ -227,20 +227,25 @@ body {
 }
 
 .output-container {
-  height: 70vh; 
+  height: 85vh;
   display: flex;
   flex-direction: column;
   padding-left: 50px;
+  overflow: hidden;
+}
+
+#voiceScrollWrapper {
+  overflow-x: auto;
+  overflow-y: visible;
+  width: 94%;
+  flex: 1 1 auto;
 }
 
 #output {
-  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  height: 100%;     
-  min-height: 0;        
+  min-width: max-content;
 }
-
 
 button.active {
   background-color: #a8a8a8;
@@ -276,9 +281,7 @@ button.active {
 }
 .voiceContainer {
   position: relative;
-  overflow-x: auto;   
-  overflow-y: hidden; 
-  width: 500px;       
+  overflow: visible;
   height: 300px;
   background: white;
 }
@@ -294,10 +297,7 @@ button.active {
 
 #upperVoiceContainer, #middleVoiceContainer, #lowerVoiceContainer, #voice4Container {
   height: 300px;
-  width: 95%;  
-  overflow-x: auto;    
-  overflow-y: visible; 
-  white-space: nowrap;  
+  overflow: visible;
   padding-left: 30px;
   background-color: white;
 }

@@ -1861,3 +1861,7 @@ function exportVoiceToMusicXML(voice: Part): void {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+window.addEventListener('load', () => {
+  drawAllVoices();
+});

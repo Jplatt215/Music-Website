@@ -1009,6 +1009,12 @@ function drawAllVoices(includeHarmony: boolean = false): void {
   }
 
   parts.forEach(part => drawTies(part.ties, contexts[part.name]));
+
+  // Set voiceWrapper width to match notation width so sticky works
+  document.querySelectorAll('.voiceWrapper').forEach(wrapper => {
+    console.log('setting voiceWrapper minWidth to:', requiredWidth + 200);
+    (wrapper as HTMLElement).style.minWidth = `${requiredWidth + 200}px`;
+  });
 }
 
 function drawTies(tieGroups: any[][], context: any): void {

@@ -843,6 +843,11 @@ function drawAllVoices(includeHarmony = false) {
         staffLength += staveWidth;
     }
     parts.forEach(part => drawTies(part.ties, contexts[part.name]));
+    // Set voiceWrapper width to match notation width so sticky works
+    document.querySelectorAll('.voiceWrapper').forEach(wrapper => {
+        console.log('setting voiceWrapper minWidth to:', requiredWidth + 200);
+        wrapper.style.minWidth = `${requiredWidth + 200}px`;
+    });
 }
 function drawTies(tieGroups, context) {
     for (const notesToTie of tieGroups) {

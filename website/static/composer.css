@@ -199,7 +199,7 @@ body {
   align-items: flex-start;
   width: 100%;
   margin-left: 50px;
-  margin-top: 100px;
+  margin-top: 50px;
   overflow: hidden;
 }
 
@@ -208,7 +208,8 @@ body {
   width: 350px;
   min-width: 350px;
   max-width: 350px;
-  padding: 10px;
+  padding-left: 10px;
+  padding-right: 10px;
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
@@ -408,7 +409,9 @@ button.active {
   gap: 5px;
   padding: 10px;
   background-color: #f2f2f2;
-  border: 1px solid #ccc;
+  border-left: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+  border-right: 1px solid #ccc;
   width: 160px;
   flex-shrink: 0;
   box-sizing: border-box;
@@ -510,4 +513,157 @@ button.active {
 
 .hidden {
   display: none !important;
+}
+
+#measureBarWrapper {
+  display: flex;
+  flex-direction: row;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 36px;
+  min-width: 100%;
+}
+
+#layerTabs {
+  flex: 0 0 160px;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background-color: hsl(0, 0%, 86%);
+  position: sticky;
+  left: 0;
+  z-index: 101;
+}
+
+#measureBar {
+  display: flex;
+  flex-direction: row;
+  background-color: hsl(0, 0%, 86%);
+  height: 36px;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#layerTabs {
+  flex: 0 0 160px;
+  min-width: 160px;
+  display: flex;
+  align-items: stretch;
+  background-color: hsl(0, 0%, 86%);
+  position: sticky;
+  left: 0;
+  z-index: 101;
+}
+
+.layer-toggle {
+  flex: 1;
+  background-color: #f2f2f2;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  font-family: "Times New Roman", Times, serif;
+  font-size: 16px;
+  color: #333;
+  text-align: center;
+}
+
+.layer-toggle:hover {
+  background-color: #b0b0b0;
+}
+
+.layer-tab:hover {
+  background-color: #d0d0d0;
+}
+
+.layer-tab-active {
+  background-color: #c0c0c0;
+  font-weight: bold;
+}
+
+.measure-bar-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+  border-right: 1px solid #ccc;
+  background-color: #f2f2f2;
+  cursor: pointer;
+  font-family: "Times New Roman", Times, serif;
+  color: #333;
+  box-sizing: border-box;
+  user-select: none;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.measure-bar-cell:hover {
+  background-color: #d0d0d0;
+}
+
+.measure-bar-cell.selected {
+  background-color: #c0c0c0;
+}
+
+.measure-number {
+  flex: 1;
+  font-size: 18px;
+  padding-left: 10px;
+}
+
+.measure-timesig {
+  display: none;
+  font-size: 18px;
+  color: #555;
+  padding-right: 20px;
+}
+
+.measure-delete-btn,
+.measure-add-btn {
+  display: none;
+}
+
+.measure-bar-cell.selected .measure-timesig,
+.measure-bar-cell.selected .measure-delete-btn,
+.measure-bar-cell.selected .measure-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.measure-action-btn {
+  background: none;
+  border: 1px solid #888;
+  border-radius: 2px;
+  font-size: 16px;
+  padding: 1px 4px;
+  cursor: pointer;
+  line-height: 1;
+  color: #333;
+  flex-shrink: 0;
+}
+
+.measure-action-btn:hover {
+  background-color: #aaa;
+}
+
+.measure-delete-btn {
+  color: red;
+}
+
+.measure-timesig-editor {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+}
+
+.measure-timesig-editor select {
+  font-size: 10px;
+  padding: 0;
+  border: 1px solid #888;
+  background: white;
+  width: 28px;
 }

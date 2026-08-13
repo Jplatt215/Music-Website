@@ -65,9 +65,6 @@ function loadCompositionData(data: any): void {
   mode          = data.mode;
   measureLength = timeSignature[0] / timeSignature[1];
 
-  topSelect.value         = String(timeSignature[0]);
-  bottomSelect.value      = String(timeSignature[1]);
-  numMeasuresSelect.value = String(numMeasures);
   modeSelect.value        = mode;
 
   for (const voiceName of [...voices, 'harmonyVoice']) {
@@ -82,12 +79,13 @@ function loadCompositionData(data: any): void {
     resetPart(voice);
 
     const notes = saved.notes.map((n: any) => {
-      const note = new UnprocessedNote(n.noteName, n.octave, n.duration, n.dotted);
+      const note = new UnprocessedNote(n.noteName, n.octave, n.duration, n.dotted, n.tiedToNext ?? false);
       if (n.tupletInfo) note.tupletInfo = { ...n.tupletInfo };
       return note;
     });
 
-    processNotes(voice, notes, voiceName === 'harmonyVoice');
+    processNotes(voice, notes);
+    drawAllVoices();
   }
 }
 
@@ -302,9 +300,29 @@ async function saveAsNew(): Promise<void> {
 newCompositionButton?.addEventListener('click', () => {
   if (!confirm('Start a new composition? Unsaved changes will be lost.')) return;
 
+  numMeasures = 1;
+
   for (const voiceName of [...voices, 'harmonyVoice']) {
     resetPart(voicesMap[voiceName]);
   }
+
+  for (const voiceName of voices) {
+    const voice = voicesMap[voiceName];
+    const restNotes: UnprocessedNote[] = [];
+    const durationsLargestFirst = Object.entries(durationMapping).sort((a, b) => b[1] - a[1]);
+    let remaining = numMeasures * measureLength;
+    while (remaining > 1e-9) {
+      for (const [durStr, durVal] of durationsLargestFirst) {
+        if (durVal <= remaining + 1e-9) {
+          restNotes.push(new UnprocessedNote(["Rest"], 4, durStr, false));
+          remaining = round(remaining - durVal);
+          break;
+        }
+      }
+    }
+    processNotes(voice, restNotes);
+  }
+
   drawAllVoices();
 
   currentSlug  = null;

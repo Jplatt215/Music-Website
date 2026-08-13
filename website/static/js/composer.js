@@ -1,5 +1,9 @@
 "use strict";
 /// <reference path="declarations.d.ts" />
+const numMeasuresMemory = [];
+let numMeasuresMemoryIndex = -1;
+const timeSignatureMemory = [];
+let timeSignatureMemoryIndex = -1;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Voice Container Setup
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -54,9 +58,6 @@ const copyPartButton = document.querySelector('.copyPartButton');
 const pastePartButton = document.querySelector('.pastePartButton');
 const previousButton = document.querySelector('.previousButton');
 const nextButton = document.querySelector('.nextButton');
-const topSelect = document.getElementById('timeSignatureTop');
-const bottomSelect = document.getElementById('timeSignatureBottom');
-const numMeasuresSelect = document.getElementById('numMeasuresSelect');
 const modeSelect = document.getElementById("modeSelect");
 const randomHarmonyButton = document.querySelector('.randomHarmonyButton');
 const chordPlayButton = document.querySelector(".chordPlayButton");
@@ -64,6 +65,12 @@ let timeSignature = [4, 4];
 let measureLength = timeSignature[0] * (1 / timeSignature[1]);
 let numMeasures = 1;
 let mode = "Standard";
+let currentLayer = 'main';
+document.getElementById('layerToggle')?.addEventListener('click', () => {
+    currentLayer = currentLayer === 'main' ? 'harmony' : 'main';
+    const btn = document.getElementById('layerToggle');
+    btn.textContent = currentLayer === 'main' ? 'Main' : 'Harmony';
+});
 class Part {
     constructor(name, pitchRange = ["E3", "E6"], rhythmRange = [0.03125, 1], scale = ["C", "Chromatic"]) {
         this.name = name;
@@ -83,13 +90,14 @@ class Part {
     }
 }
 class UnprocessedNote {
-    constructor(noteName, octave, duration, dotted = false) {
+    constructor(noteName, octave, duration, dotted = false, tiedToNext = false) {
         this.noteName = Array.isArray(noteName) ? noteName : [noteName];
         this.octave = octave;
         this.duration = duration;
         this.dotted = dotted;
         this.isRest = this.noteName[0] === "Rest";
         this.tupletInfo = null;
+        this.tiedToNext = tiedToNext;
     }
     toStaveNote() {
         return createNote(this.noteName, this.octave, this.dotted ? this.duration + "d" : this.duration);
@@ -144,6 +152,7 @@ const durationMapping = {
     "8d": 0.125 + 0.0625,
     "16d": 0.0625 + 0.03125,
 };
+const durationsLargestFirst = Object.entries(durationMapping).sort((durA, durB) => durB[1] - durA[1]);
 const typeMapping = {
     1: "whole", 0.5: "half", 0.25: "quarter",
     0.125: "8th", 0.0625: "16th", 0.03125: "32nd",
@@ -337,6 +346,13 @@ document.querySelectorAll(".voiceSettings").forEach(settings => {
     midiButton.addEventListener("click", () => exportVoiceToMidi(voice));
     musicXMLButton.addEventListener("click", () => exportVoiceToMusicXML(voice));
 });
+document.addEventListener('click', (e) => {
+    const bar = document.getElementById('measureBar');
+    if (bar && !bar.contains(e.target)) {
+        selectedMeasureIndex = null;
+        drawMeasureBar(getGlobalMeasureWidths(Object.values(voicesMap).filter(voice => voice !== harmonyVoice)));
+    }
+});
 ////////////////////////////////////////////////////////////////////////////////////
 const transposeDropdown = document.getElementById("transposeDropdown");
 transposeButton.addEventListener("click", () => {
@@ -417,6 +433,7 @@ function bindVoiceAction(button, action, update = true) {
     button.addEventListener("click", () => {
         for (const part of selectedVoices)
             action(part);
+        drawAllVoices();
         if (update)
             updateMemory();
     });
@@ -436,17 +453,6 @@ voiceContainers.forEach(container => {
         }
     });
 });
-topSelect.addEventListener('change', () => {
-    timeSignature[0] = parseInt(topSelect.value, 10);
-    measureLength = timeSignature[0] / timeSignature[1];
-});
-bottomSelect.addEventListener('change', () => {
-    timeSignature[1] = parseInt(bottomSelect.value, 10);
-    measureLength = timeSignature[0] / timeSignature[1];
-});
-numMeasuresSelect.addEventListener('change', () => {
-    numMeasures = parseInt(numMeasuresSelect.value, 10);
-});
 bpmSlider.addEventListener("input", () => {
     bpmValueDisplay.textContent = bpmSlider.value;
 });
@@ -465,9 +471,14 @@ function setupPlayButton(button, parts) {
 setupPlayButton(playButton, [upperVoice, middleVoice, lowerVoice, voice4]);
 setupPlayButton(chordPlayButton, [harmonyVoice]);
 bindVoiceAction(generatePhraseButton, part => {
+    const savedNotes = [...part.unprocessedNotes];
     resetPart(part);
     totalDuration = 0;
     generatePhrase(part, numMeasures * measureLength);
+    if (part.unprocessedNotes.length === 0) {
+        resetPart(part);
+        processNotes(part, savedNotes);
+    }
 });
 separateVoiceButton?.addEventListener("click", () => { separateVoice(); updateMemory(); });
 bindVoiceAction(reverseButton, reverseVoice);
@@ -600,7 +611,6 @@ function fillDuration(fillNoteDuration, note) {
         noteOctave = parseInt(octaveStr);
     }
     const fillNotes = [];
-    const durationsLargestFirst = Object.entries(durationMapping).sort((a, b) => b[1] - a[1]);
     let remaining = fillNoteDuration;
     while (remaining > 0) {
         for (const [durStr, durValue] of durationsLargestFirst) {
@@ -616,10 +626,11 @@ function fillDuration(fillNoteDuration, note) {
 function round(val) {
     return Math.round(val * 1e9) / 1e9;
 }
-function processNotes(part, unprocessedNotes, drawHarmony = false) {
+function processNotes(part, unprocessedNotes) {
     let tupletNotes = [];
     let measureNotes = [];
     let posInMeasure = 0;
+    let currentTieGroup = [];
     for (const unprocessedNote of unprocessedNotes) {
         part.unprocessedNotes.push(unprocessedNote);
         const note = unprocessedNote.toStaveNote();
@@ -647,9 +658,16 @@ function processNotes(part, unprocessedNotes, drawHarmony = false) {
         else {
             const noteDur = getNoteDuration(unprocessedNote);
             if (round(posInMeasure + noteDur) > measureLength) {
+                // Note overflows barline — split and tie
+                unprocessedNote.tiedToNext = true;
                 const fillDur = round(measureLength - posInMeasure);
                 let overflowDur = round(noteDur - fillDur);
                 const notesToTie = [];
+                // If this note is continuing a tiedToNext group, add it to that group
+                if (currentTieGroup.length > 0) {
+                    notesToTie.push(...currentTieGroup);
+                    currentTieGroup = [];
+                }
                 const fillNotes = fillDuration(fillDur, note);
                 measureNotes.push(...fillNotes);
                 notesToTie.push(...fillNotes);
@@ -672,6 +690,20 @@ function processNotes(part, unprocessedNotes, drawHarmony = false) {
                     part.ties.push(notesToTie);
             }
             else {
+                // Note fits in current measure
+                if (unprocessedNote.tiedToNext && !unprocessedNote.isRest) {
+                    // This note is tied to the next — start or continue a tie group
+                    currentTieGroup.push(note);
+                }
+                else if (currentTieGroup.length > 0 && !unprocessedNote.isRest) {
+                    // Previous note(s) were tiedToNext, this one ends the group
+                    currentTieGroup.push(note);
+                    part.ties.push([...currentTieGroup]);
+                    currentTieGroup = [];
+                }
+                else {
+                    currentTieGroup = [];
+                }
                 measureNotes.push(note);
                 posInMeasure = round(posInMeasure + noteDur);
                 if (posInMeasure >= measureLength) {
@@ -683,9 +715,12 @@ function processNotes(part, unprocessedNotes, drawHarmony = false) {
             part.toneNotes.push([staveNoteToToneJSNote(note), noteDur]);
         }
     }
+    // Close any open tie group at end
+    if (currentTieGroup.length > 1) {
+        part.ties.push([...currentTieGroup]);
+    }
     if (measureNotes.length > 0)
         part.notes.push([...measureNotes]);
-    drawAllVoices(drawHarmony);
 }
 function resetPart(part) {
     part.unprocessedNotes = [];
@@ -699,7 +734,8 @@ function resetPart(part) {
 // Memory
 /////////////////////////////////////////////////////////////////////////////////////
 function updateMemory() {
-    for (const voice of selectedVoices) {
+    const voicesToSave = Object.values(voicesMap).filter(voice => voice !== harmonyVoice);
+    for (const voice of voicesToSave) {
         voice.memory.splice(voice.currentMemoryIndex + 1);
         const snapshot = voice.unprocessedNotes.map(note => ({
             noteName: [...note.noteName],
@@ -707,16 +743,34 @@ function updateMemory() {
             duration: note.duration,
             dotted: note.dotted,
             tupletInfo: note.tupletInfo ? { ...note.tupletInfo } : null,
+            tiedToNext: note.tiedToNext,
         }));
         voice.memory.push(snapshot);
         voice.currentMemoryIndex = voice.memory.length - 1;
     }
-    // Autosave on every state change
+    numMeasuresMemory.splice(numMeasuresMemoryIndex + 1);
+    numMeasuresMemory.push(numMeasures);
+    numMeasuresMemoryIndex = numMeasuresMemory.length - 1;
+    timeSignatureMemory.splice(timeSignatureMemoryIndex + 1);
+    timeSignatureMemory.push([...timeSignature]);
+    timeSignatureMemoryIndex = timeSignatureMemory.length - 1;
     if (typeof saveToLocalStorage === 'function')
         saveToLocalStorage();
 }
 function accessMemory(indexDifference) {
-    for (const voice of selectedVoices) {
+    const newTimeSigIdx = timeSignatureMemoryIndex + indexDifference;
+    if (newTimeSigIdx >= 0 && newTimeSigIdx < timeSignatureMemory.length) {
+        timeSignatureMemoryIndex = newTimeSigIdx;
+        timeSignature = [...timeSignatureMemory[newTimeSigIdx]];
+        measureLength = timeSignature[0] / timeSignature[1];
+    }
+    const newMeasureIdx = numMeasuresMemoryIndex + indexDifference;
+    if (newMeasureIdx >= 0 && newMeasureIdx < numMeasuresMemory.length) {
+        numMeasuresMemoryIndex = newMeasureIdx;
+        numMeasures = numMeasuresMemory[newMeasureIdx];
+    }
+    const voicesToRestore = Object.values(voicesMap).filter(voice => voice !== harmonyVoice);
+    for (const voice of voicesToRestore) {
         const newIdx = voice.currentMemoryIndex + indexDifference;
         if (newIdx < 0 || newIdx >= voice.memory.length)
             continue;
@@ -724,13 +778,14 @@ function accessMemory(indexDifference) {
         const snapshot = voice.memory[newIdx];
         resetPart(voice);
         const notes = snapshot.map(s => {
-            const note = new UnprocessedNote([...s.noteName], s.octave, s.duration, s.dotted);
+            const note = new UnprocessedNote([...s.noteName], s.octave, s.duration, s.dotted, s.tiedToNext);
             if (s.tupletInfo)
                 note.tupletInfo = { ...s.tupletInfo };
             return note;
         });
         processNotes(voice, notes);
     }
+    drawAllVoices();
 }
 function copyPart() {
     clipboard = {};
@@ -741,6 +796,7 @@ function copyPart() {
             duration: note.duration,
             dotted: note.dotted,
             tupletInfo: note.tupletInfo ? { ...note.tupletInfo } : null,
+            tiedToNext: note.tiedToNext,
         }));
     }
 }
@@ -752,7 +808,7 @@ function pastePart() {
         const sourceVoiceName = copiedVoiceNames[i % copiedVoiceNames.length];
         const sourceNotes = clipboard[sourceVoiceName];
         const notes = sourceNotes.map(s => {
-            const note = new UnprocessedNote([...s.noteName], s.octave, s.duration, s.dotted);
+            const note = new UnprocessedNote([...s.noteName], s.octave, s.duration, s.dotted, s.tiedToNext);
             if (s.tupletInfo)
                 note.tupletInfo = { ...s.tupletInfo };
             return note;
@@ -760,6 +816,7 @@ function pastePart() {
         resetPart(voice);
         processNotes(voice, notes);
     });
+    drawAllVoices();
 }
 /////////////////////////////////////////////////////////////////////////////////////
 // Draw
@@ -792,6 +849,9 @@ function getGlobalMeasureWidths(parts) {
             globalWidths[i] = Math.max(globalWidths[i] || 0, width);
         });
     });
+    for (let i = globalWidths.length; i < numMeasures; i++) {
+        globalWidths[i] = 400;
+    }
     return globalWidths;
 }
 function getTupletsForMeasure(part, measureIndex) {
@@ -810,7 +870,7 @@ function drawAllVoices(includeHarmony = false) {
         eraseDrawing(part);
         ensureSvgSize(part.name, requiredWidth);
     });
-    const measureCount = Math.max(...parts.map(part => part.notes.length), 0);
+    const measureCount = Math.max(...parts.map(part => part.notes.length), numMeasures);
     let staffLength = 0;
     for (let measureIndex = 0; measureIndex < measureCount; measureIndex++) {
         const staveWidth = globalMeasureWidths[measureIndex] || 400;
@@ -832,22 +892,37 @@ function drawAllVoices(includeHarmony = false) {
                 tuplets: getTupletsForMeasure(part, measureIndex),
             });
         });
-        const formatter = new Formatter();
-        formatter.joinVoices(voiceObjs.map(voiceObj => voiceObj.voice));
-        formatter.formatToStave(voiceObjs.map(voiceObj => voiceObj.voice), Object.values(staves)[0]);
+        const nonEmptyVoiceObjs = voiceObjs.filter(voice => voice.voice.getTickables().length > 0);
+        if (nonEmptyVoiceObjs.length > 0) {
+            const formatter = new Formatter();
+            formatter.joinVoices(nonEmptyVoiceObjs.map(v => v.voice));
+            formatter.formatToStave(nonEmptyVoiceObjs.map(v => v.voice), Object.values(staves)[0]);
+        }
         voiceObjs.forEach(({ voice, part, beams, tuplets }) => {
-            voice.draw(contexts[part.name], staves[part.name]);
+            if (voice.getTickables().length > 0) {
+                voice.draw(contexts[part.name], staves[part.name]);
+            }
             beams.forEach(beam => beam.setContext(contexts[part.name]).draw());
             tuplets.forEach(tuplet => tuplet.setContext(contexts[part.name]).draw());
         });
         staffLength += staveWidth;
     }
-    parts.forEach(part => drawTies(part.ties, contexts[part.name]));
+    parts.forEach(part => {
+        drawTies(part.ties, contexts[part.name]);
+    });
     // Set voiceWrapper width to match notation width so sticky works
     document.querySelectorAll('.voiceWrapper').forEach(wrapper => {
-        console.log('setting voiceWrapper minWidth to:', requiredWidth + 200);
         wrapper.style.minWidth = `${requiredWidth + 200}px`;
     });
+    // Set measureBarWrapper width to match notation so sticky works
+    const measureBarWrapper = document.getElementById('measureBarWrapper');
+    if (measureBarWrapper)
+        measureBarWrapper.style.minWidth = `${requiredWidth + 200}px`;
+    // Draw measure bar
+    const barWidths = globalMeasureWidths.length > 0
+        ? globalMeasureWidths
+        : Array(numMeasures).fill(400);
+    drawMeasureBar(barWidths);
 }
 function drawTies(tieGroups, context) {
     for (const notesToTie of tieGroups) {
@@ -869,9 +944,365 @@ function eraseDrawing(part) {
     }
     containers[partName].innerHTML = "";
     renderers[partName] = new Renderer(containers[partName], Renderer.Backends.SVG);
-    const container = containers[partName];
-    renderers[partName].resize(container.clientWidth, container.clientHeight);
     contexts[partName] = renderers[partName].getContext();
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Measure Bar
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+let selectedMeasureIndex = null;
+function drawMeasureBar(measureWidths) {
+    const bar = document.getElementById('measureBar');
+    if (!bar)
+        return;
+    bar.innerHTML = '';
+    const spacer = document.createElement('div');
+    spacer.className = 'measure-bar-spacer';
+    bar.appendChild(spacer);
+    measureWidths.forEach((width, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'measure-bar-cell';
+        const extraWidth = i === 0 ? 30.5 : 0;
+        cell.style.width = `${width + extraWidth}px`;
+        cell.style.minWidth = `${width + extraWidth}px`;
+        cell.style.flexShrink = '0';
+        if (i === selectedMeasureIndex)
+            cell.classList.add('selected');
+        // Delete button (hidden until selected)
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'measure-action-btn measure-delete-btn';
+        deleteBtn.textContent = '×';
+        deleteBtn.title = 'Delete measure';
+        deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteMeasure(i);
+        });
+        // Measure number (always visible)
+        const label = document.createElement('span');
+        label.className = 'measure-number';
+        label.textContent = String(i + 1);
+        // Time signature display (hidden until selected)
+        const timeSigDisplay = document.createElement('span');
+        timeSigDisplay.className = 'measure-timesig';
+        timeSigDisplay.textContent = `${timeSignature[0]}/${timeSignature[1]}`;
+        timeSigDisplay.addEventListener('click', (e) => {
+            e.stopPropagation();
+            timeSigDisplay.style.display = 'none';
+            timeSigEditor.style.display = 'flex';
+        });
+        // Time signature editor (hidden until timeSigDisplay clicked)
+        const timeSigEditor = document.createElement('div');
+        timeSigEditor.className = 'measure-timesig-editor';
+        timeSigEditor.style.display = 'none';
+        const topSel = document.createElement('select');
+        for (let num = 1; num <= 16; num++) {
+            const opt = document.createElement('option');
+            opt.value = String(num);
+            opt.textContent = String(num);
+            if (num === timeSignature[0])
+                opt.selected = true;
+            topSel.appendChild(opt);
+        }
+        const slash = document.createElement('span');
+        slash.textContent = '/';
+        slash.style.margin = '0 1px';
+        const bottomSel = document.createElement('select');
+        for (const val of ['2', '4', '8', '16']) {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = val;
+            if (parseInt(val) === timeSignature[1])
+                opt.selected = true;
+            bottomSel.appendChild(opt);
+        }
+        function applyTimeSignatureChange() {
+            const newTop = parseInt(topSel.value);
+            const newBottom = parseInt(bottomSel.value);
+            const newMeasureLength = newTop / newBottom;
+            // Check if any tuplet would cross a barline with new time signature
+            for (const voiceName of voices) {
+                const voice = voicesMap[voiceName];
+                let pos = 0;
+                for (const note of voice.unprocessedNotes) {
+                    if (note.tupletInfo) {
+                        if (note.tupletInfo.index === 1) {
+                            const tupletStart = pos;
+                            const tupletEnd = round(tupletStart + note.tupletInfo.totalTupletDuration);
+                            const measureStart = Math.floor(round(tupletStart / newMeasureLength)) * newMeasureLength;
+                            const measureEnd = round(measureStart + newMeasureLength);
+                            if (tupletStart >= measureStart && tupletEnd > measureEnd) {
+                                alert(`Cannot change time signature — a tuplet in ${voiceName} would cross a barline.`);
+                                topSel.value = String(timeSignature[0]);
+                                bottomSel.value = String(timeSignature[1]);
+                                return;
+                            }
+                        }
+                        if (note.tupletInfo.index === note.tupletInfo.count) {
+                            pos = round(pos + note.tupletInfo.totalTupletDuration);
+                        }
+                    }
+                    else {
+                        pos = round(pos + getNoteDuration(note));
+                    }
+                }
+            }
+            timeSignature[0] = newTop;
+            timeSignature[1] = newBottom;
+            measureLength = newMeasureLength;
+            // Reprocess all voices with new measureLength
+            for (const voiceName of voices) {
+                const voice = voicesMap[voiceName];
+                const savedNotes = [...voice.unprocessedNotes];
+                resetPart(voice);
+                processNotes(voice, savedNotes);
+                // Pad with rests to fill remaining measure space
+                const totalDur = getTotalDuration(voice);
+                const targetDur = round(numMeasures * measureLength);
+                const remainder = round(targetDur - totalDur);
+                if (remainder > 1e-9) {
+                    const currentNotes = [...voice.unprocessedNotes];
+                    resetPart(voice);
+                    processNotes(voice, [...currentNotes, ...fillDurationWithRests(remainder)]);
+                }
+            }
+            // Update numMeasures to match actual measure count after reprocessing
+            numMeasures = Math.max(...voices.map(voiceName => voicesMap[voiceName].notes.length), 1);
+            drawAllVoices();
+            updateMemory();
+        }
+        topSel.addEventListener('change', (e) => { e.stopPropagation(); applyTimeSignatureChange(); });
+        bottomSel.addEventListener('change', (e) => { e.stopPropagation(); applyTimeSignatureChange(); });
+        timeSigEditor.appendChild(topSel);
+        timeSigEditor.appendChild(slash);
+        timeSigEditor.appendChild(bottomSel);
+        // Add button (hidden until selected)
+        const addBtn = document.createElement('button');
+        addBtn.className = 'measure-action-btn measure-add-btn';
+        addBtn.textContent = '+';
+        addBtn.title = 'Insert measure after';
+        addBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            insertMeasureAfter(i);
+        });
+        cell.appendChild(deleteBtn);
+        cell.appendChild(label);
+        cell.appendChild(timeSigDisplay);
+        cell.appendChild(timeSigEditor);
+        cell.appendChild(addBtn);
+        cell.addEventListener('click', () => {
+            bar.querySelectorAll('.measure-bar-cell').forEach(c => c.classList.remove('selected'));
+            cell.classList.add('selected');
+            selectedMeasureIndex = i;
+        });
+        bar.appendChild(cell);
+    });
+}
+function fillDurationAsUnprocessed(duration, sourceNote) {
+    const result = [];
+    let remaining = duration;
+    while (remaining > 1e-9) {
+        for (const [durStr, durVal] of durationsLargestFirst) {
+            if (durVal <= remaining + 1e-9) {
+                result.push(new UnprocessedNote(sourceNote.isRest ? ["Rest"] : [...sourceNote.noteName], sourceNote.octave, durStr, false, true // tiedToNext = true, will be corrected for last note below
+                ));
+                remaining = round(remaining - durVal);
+                break;
+            }
+        }
+    }
+    // Last note is not tied to next
+    if (result.length > 0)
+        result[result.length - 1].tiedToNext = false;
+    return result;
+}
+function fillDurationWithRests(duration) {
+    const rests = [];
+    let remaining = duration;
+    while (remaining > 1e-9) {
+        for (const [durStr, durVal] of durationsLargestFirst) {
+            if (durVal <= remaining + 1e-9) {
+                rests.push(new UnprocessedNote(["Rest"], 4, durStr, false));
+                remaining = round(remaining - durVal);
+                break;
+            }
+        }
+    }
+    return rests;
+}
+function getTotalDuration(voice) {
+    let total = 0;
+    for (const note of voice.unprocessedNotes) {
+        if (note.tupletInfo) {
+            if (note.tupletInfo.index === note.tupletInfo.count) {
+                total += note.tupletInfo.totalTupletDuration;
+            }
+        }
+        else {
+            total += getNoteDuration(note);
+        }
+    }
+    return round(total);
+}
+function getMeasureStartDur(measureIndex) {
+    return round(measureIndex * measureLength);
+}
+function insertMeasureAfter(measureIndex) {
+    const insertAtDur = round((measureIndex + 1) * measureLength);
+    for (const voiceName of voices) {
+        const voice = voicesMap[voiceName];
+        if (!voice.unprocessedNotes.length)
+            continue;
+        const newNotes = [];
+        let pos = 0;
+        let inserted = false;
+        for (let i = 0; i < voice.unprocessedNotes.length; i++) {
+            const note = voice.unprocessedNotes[i];
+            const noteDur = note.tupletInfo
+                ? (note.tupletInfo.index === note.tupletInfo.count ? note.tupletInfo.totalTupletDuration : 0)
+                : getNoteDuration(note);
+            const noteStart = pos;
+            const noteEnd = round(pos + noteDur);
+            if (noteDur > 0)
+                pos = noteEnd;
+            if (note.tupletInfo && note.tupletInfo.index !== note.tupletInfo.count) {
+                newNotes.push(note);
+                continue;
+            }
+            if (!inserted) {
+                if (noteEnd <= insertAtDur) {
+                    newNotes.push(note);
+                    if (round(noteEnd) === round(insertAtDur)) {
+                        newNotes.push(...fillDurationWithRests(measureLength));
+                        inserted = true;
+                    }
+                }
+                else if (noteStart < insertAtDur && noteEnd > insertAtDur) {
+                    const beforeDur = round(insertAtDur - noteStart);
+                    const afterDur = round(noteEnd - insertAtDur);
+                    newNotes.push(...fillDurationAsUnprocessed(beforeDur, note));
+                    newNotes.push(...fillDurationWithRests(measureLength));
+                    newNotes.push(...fillDurationAsUnprocessed(afterDur, note));
+                    inserted = true;
+                }
+                else {
+                    newNotes.push(note);
+                }
+            }
+            else {
+                newNotes.push(note);
+            }
+        }
+        if (!inserted) {
+            newNotes.push(...fillDurationWithRests(measureLength));
+        }
+        voice.unprocessedNotes = newNotes;
+        const notesToProcess = [...voice.unprocessedNotes];
+        resetPart(voice);
+        processNotes(voice, notesToProcess);
+    }
+    numMeasures++;
+    selectedMeasureIndex = measureIndex + 1;
+    drawAllVoices();
+    updateMemory();
+}
+function deleteMeasure(measureIndex) {
+    const totalMeasures = Math.max(...Object.values(voicesMap)
+        .filter(voice => voice !== harmonyVoice && voice.notes.length > 0)
+        .map(voice => voice.notes.length), 1);
+    if (totalMeasures <= 1) {
+        for (const voiceName of voices) {
+            resetPart(voicesMap[voiceName]);
+            processNotes(voicesMap[voiceName], fillDurationWithRests(measureLength));
+        }
+        drawAllVoices();
+        updateMemory();
+        return;
+    }
+    const startDur = round(measureIndex * measureLength);
+    const endDur = round(startDur + measureLength);
+    for (const voiceName of voices) {
+        const voice = voicesMap[voiceName];
+        if (!voice.unprocessedNotes.length)
+            continue;
+        const split = [];
+        let pos = 0;
+        for (const note of voice.unprocessedNotes) {
+            if (note.tupletInfo) {
+                if (note.tupletInfo.index === note.tupletInfo.count) {
+                    pos = round(pos + note.tupletInfo.totalTupletDuration);
+                }
+                split.push(note);
+                continue;
+            }
+            const noteDur = getNoteDuration(note);
+            const noteStart = pos;
+            pos = round(pos + noteDur);
+            const firstBoundary = round((Math.floor(noteStart / measureLength) + 1) * measureLength);
+            if (pos <= firstBoundary + 1e-9) {
+                split.push(note);
+            }
+            else {
+                let remaining = noteDur;
+                let currentPos = noteStart;
+                while (remaining > 1e-9) {
+                    const boundary = round((Math.floor(currentPos / measureLength) + 1) * measureLength);
+                    const spaceInMeasure = round(Math.min(boundary - currentPos, remaining));
+                    const pieces = fillDurationAsUnprocessed(spaceInMeasure, note);
+                    const hasMore = remaining - spaceInMeasure > 1e-9;
+                    pieces.forEach((p, i) => {
+                        p.tiedToNext = (i < pieces.length - 1) || hasMore;
+                    });
+                    split.push(...pieces);
+                    remaining = round(remaining - spaceInMeasure);
+                    currentPos = round(currentPos + spaceInMeasure);
+                }
+            }
+        }
+        const newNotes = [];
+        let p = 0;
+        for (let i = 0; i < split.length; i++) {
+            const note = split[i];
+            const noteDur = note.tupletInfo
+                ? (note.tupletInfo.index === note.tupletInfo.count ? note.tupletInfo.totalTupletDuration : 0)
+                : getNoteDuration(note);
+            const noteStart = p;
+            const noteEnd = round(p + noteDur);
+            if (noteDur > 0)
+                p = noteEnd;
+            if (note.tupletInfo && note.tupletInfo.index !== note.tupletInfo.count) {
+                if (noteStart < startDur || noteEnd > endDur)
+                    newNotes.push(note);
+                continue;
+            }
+            if (noteEnd <= startDur) {
+                if (round(noteEnd) === round(startDur) && note.tiedToNext) {
+                    const cleared = new UnprocessedNote([...note.noteName], note.octave, note.duration, note.dotted, false);
+                    if (note.tupletInfo)
+                        cleared.tupletInfo = { ...note.tupletInfo };
+                    newNotes.push(cleared);
+                }
+                else {
+                    newNotes.push(note);
+                }
+            }
+            else if (noteStart >= endDur) {
+                newNotes.push(note);
+            }
+        }
+        for (let i = newNotes.length - 1; i >= 0; i--) {
+            if (!newNotes[i].tiedToNext)
+                break;
+            const nextNote = newNotes[i + 1];
+            if (!nextNote || nextNote.noteName.join(',') !== newNotes[i].noteName.join(',') || nextNote.octave !== newNotes[i].octave) {
+                newNotes[i].tiedToNext = false;
+            }
+        }
+        resetPart(voice);
+        processNotes(voice, newNotes);
+    }
+    numMeasures = Math.max(1, numMeasures - 1);
+    selectedMeasureIndex = null;
+    drawAllVoices();
+    updateMemory();
 }
 /////////////////////////////////////////////////////////////////////////////////////
 // Generate
@@ -888,15 +1319,23 @@ function generatePhrase(part, duration, allowTuplets = true) {
             allowedDurations.push(durationKey);
         }
     }
+    if (allowedDurations.length === 0) {
+        return;
+    }
+    const minAllowed = Math.min(...allowedDurations.map(d => durationMapping[d]));
+    if (round(duration % minAllowed) > 1e-9) {
+        return;
+    }
     while (currentDuration < duration) {
-        if (duration - currentDuration < part.rhythmRange[0]) {
+        const remaining = round(duration - currentDuration);
+        const fittingDurations = allowedDurations.filter(d => durationMapping[d] <= remaining + 1e-9);
+        if (fittingDurations.length === 0) {
             currentDuration = 0;
             notes = [];
             totalDuration = totalDurationOriginal;
-        }
-        const durationStr = allowedDurations[Math.floor(Math.random() * allowedDurations.length)];
-        if (currentDuration + durationMapping[durationStr] > duration)
             continue;
+        }
+        const durationStr = fittingDurations[Math.floor(Math.random() * fittingDurations.length)];
         const shouldTryTuplet = (allowTuplets &&
             !durationStr.includes("d") &&
             durationMapping[durationStr] < 1 &&
@@ -975,6 +1414,7 @@ function separateVoice() {
         resetPart(voice);
         processNotes(voice, newNotesPerVoice[voiceName]);
     }
+    drawAllVoices();
 }
 /////////////////////////////////////////////////////////////////////////////////////
 // Modify
@@ -1041,6 +1481,7 @@ function reflectVoice(voice, axisPitch) {
     }
     resetPart(voice);
     processNotes(voice, reflectedNotes);
+    drawAllVoices();
 }
 function shiftVoice(voice, distance) {
     const shiftDur = durationMapping[distance];
@@ -1078,7 +1519,6 @@ function shiftVoice(voice, distance) {
     const remainder = round(measureLength - (totalDur % measureLength));
     const lastMeasureIsIncomplete = remainder > 0 && remainder < measureLength;
     if (lastMeasureIsIncomplete) {
-        const durationsLargestFirst = Object.entries(durationMapping).sort((a, b) => b[1] - a[1]);
         let remaining = remainder;
         while (remaining > 1e-9) {
             for (const [durStr, durVal] of durationsLargestFirst) {
@@ -1092,6 +1532,7 @@ function shiftVoice(voice, distance) {
     }
     resetPart(voice);
     processNotes(voice, shiftedNotes);
+    drawAllVoices();
 }
 function transposeVoice(voice, scaleDegreeDifference) {
     const rootIndex = noteMapping[voice.scale[0]];
@@ -1133,6 +1574,7 @@ function transposeVoice(voice, scaleDegreeDifference) {
     }
     resetPart(voice);
     processNotes(voice, transposedNotes);
+    drawAllVoices();
 }
 function shuffleRhythm(voice) {
     const pitches = voice.unprocessedNotes.map(note => ({
@@ -1546,7 +1988,8 @@ function generateHarmony() {
         allNotes.push(new UnprocessedNote(chordNotes, 4, durationStr, isDotted));
         currentDuration = round(currentDuration + duration);
     }
-    processNotes(harmonyVoice, allNotes, true);
+    processNotes(harmonyVoice, allNotes);
+    drawAllVoices(true);
 }
 /////////////////////////////////////////////////////////////////////////////////////
 // Export
@@ -1632,5 +2075,12 @@ function exportVoiceToMusicXML(voice) {
     URL.revokeObjectURL(url);
 }
 window.addEventListener('load', () => {
+    const hasExistingNotes = Object.values(voicesMap).some(voice => voice !== harmonyVoice && voice.unprocessedNotes.length > 0);
+    if (!hasExistingNotes) {
+        for (const voiceName of voices) {
+            resetPart(voicesMap[voiceName]);
+            processNotes(voicesMap[voiceName], fillDurationWithRests(numMeasures * measureLength));
+        }
+    }
     drawAllVoices();
 });

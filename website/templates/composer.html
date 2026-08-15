@@ -73,7 +73,6 @@
       <div class="tabs">
         <button class="tab-btn active" data-target="input-menu">Create</button>
         <button class="tab-btn" data-target="load-menu">Load</button>
-        <button class="tab-btn" data-target="settings-menu">Settings</button>
       </div>
 
       <!-- Input Menu -->
@@ -212,23 +211,7 @@
 
   </div>
 </div>
-
-      <!-- Settings Menu -->
-      <div id="settings-menu" class="tab-content hidden">
-        <div class="row">
-            </div>
-            <div class="row">
-                <div class="buttonDescription">Mode</div>
-                <select id="modeSelect">
-                    <option value="Standard" selected>Standard</option>
-                    <option value="Harmony">Harmony</option>
-                </select>
-            </div>
-            <div id="harmonyVoiceContainer" class="voiceContainer" data-name="harmonyVoice"></div>
-            <button class="randomHarmonyButton" style="width: 100%">⤮</button>
-            <button class="chordPlayButton" style="width: 100%">⏵</button>
-        </div>
-    </div>
+</div>
         
     
     <!-- Output -->
@@ -265,6 +248,9 @@
         <div class="row">
           <select class="scaleSelect"></select>
         </div>
+      </div>
+      <div class="row">
+        <button class="harmonizeButton">Harmonize</button>
       </div>
       <div class="row">
         <select class="minPitch"></select> - <select class="maxPitch"></select>

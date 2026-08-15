@@ -667,3 +667,19 @@ button.active {
   background: white;
   width: 28px;
 }
+
+.harmonizeButton {
+  width: 80px;
+  height: 20px;
+  border: 1px solid #575757;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.layer-harmony .harmonizeButton {
+  display: none;
+}
+button:focus {
+  outline: none;
+}

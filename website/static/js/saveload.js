@@ -29,49 +29,64 @@ function showSaveError(message) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Serialize / Deserialize
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+function serializeVoice(voice) {
+    return {
+        pitchRange: voice.pitchRange,
+        rhythmRange: voice.rhythmRange,
+        scale: voice.scale,
+        harmonize: voice.harmonize,
+        muted: voice.muted,
+        notes: voice.unprocessedNotes.map(note => ({
+            noteName: note.noteName,
+            octave: note.octave,
+            duration: note.duration,
+            dotted: note.dotted,
+            tupletInfo: note.tupletInfo,
+            tiedToNext: note.tiedToNext,
+        })),
+    };
+}
+function restoreVoice(voice, saved) {
+    if (!saved)
+        return;
+    voice.pitchRange = saved.pitchRange;
+    voice.rhythmRange = saved.rhythmRange;
+    voice.scale = saved.scale;
+    voice.harmonize = saved.harmonize ?? voice.harmonize;
+    voice.muted = saved.muted ?? false;
+    resetPart(voice);
+    const notes = saved.notes.map((n) => {
+        const note = new UnprocessedNote(n.noteName, n.octave, n.duration, n.dotted, n.tiedToNext ?? false);
+        if (n.tupletInfo)
+            note.tupletInfo = { ...n.tupletInfo };
+        return note;
+    });
+    processNotes(voice, notes);
+}
 function getCompositionData() {
-    const voiceData = {};
-    for (const voiceName of [...voices, 'harmonyVoice']) {
-        const voice = voicesMap[voiceName];
-        voiceData[voiceName] = {
-            pitchRange: voice.pitchRange,
-            rhythmRange: voice.rhythmRange,
-            scale: voice.scale,
-            notes: voice.unprocessedNotes.map(note => ({
-                noteName: note.noteName,
-                octave: note.octave,
-                duration: note.duration,
-                dotted: note.dotted,
-                tupletInfo: note.tupletInfo,
-            })),
-        };
+    const mainData = {};
+    const harmonyData = {};
+    for (const voiceName of voices) {
+        mainData[voiceName] = serializeVoice(mainVoices[voiceName]);
+        harmonyData[voiceName] = serializeVoice(harmonyVoices[voiceName]);
     }
-    return { timeSignature, numMeasures, mode, voices: voiceData };
+    return { timeSignature, numMeasures, main: mainData, harmony: harmonyData };
 }
 function loadCompositionData(data) {
     timeSignature = data.timeSignature;
     numMeasures = data.numMeasures;
-    mode = data.mode;
     measureLength = timeSignature[0] / timeSignature[1];
-    modeSelect.value = mode;
-    for (const voiceName of [...voices, 'harmonyVoice']) {
-        const voice = voicesMap[voiceName];
-        const saved = data.voices[voiceName];
-        if (!saved)
-            continue;
-        voice.pitchRange = saved.pitchRange;
-        voice.rhythmRange = saved.rhythmRange;
-        voice.scale = saved.scale;
-        resetPart(voice);
-        const notes = saved.notes.map((n) => {
-            const note = new UnprocessedNote(n.noteName, n.octave, n.duration, n.dotted, n.tiedToNext ?? false);
-            if (n.tupletInfo)
-                note.tupletInfo = { ...n.tupletInfo };
-            return note;
-        });
-        processNotes(voice, notes);
-        drawAllVoices();
+    for (const voiceName of voices) {
+        restoreVoice(mainVoices[voiceName], data.main[voiceName]);
+        restoreVoice(harmonyVoices[voiceName], data.harmony[voiceName]);
     }
+    // Sync the settings panel UI (scale, pitch/rhythm range, harmonize toggle, mute)
+    // to match whichever layer's voices were just restored.
+    document.querySelectorAll(".voiceSettings").forEach(settings => {
+        const voiceName = settings.dataset.voice;
+        populateVoiceSettings(settings, voiceName);
+    });
+    drawAllVoices();
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Composition List
@@ -267,25 +282,21 @@ newCompositionButton?.addEventListener('click', () => {
     if (!confirm('Start a new composition? Unsaved changes will be lost.'))
         return;
     numMeasures = 1;
-    for (const voiceName of [...voices, 'harmonyVoice']) {
-        resetPart(voicesMap[voiceName]);
+    timeSignature = [4, 4];
+    measureLength = timeSignature[0] / timeSignature[1];
+    for (const voiceName of voices) {
+        resetVoiceToDefaults(mainVoices[voiceName], [0.03125, 1]);
+        resetVoiceToDefaults(harmonyVoices[voiceName], [0.25, 1]);
     }
     for (const voiceName of voices) {
-        const voice = voicesMap[voiceName];
-        const restNotes = [];
-        const durationsLargestFirst = Object.entries(durationMapping).sort((a, b) => b[1] - a[1]);
-        let remaining = numMeasures * measureLength;
-        while (remaining > 1e-9) {
-            for (const [durStr, durVal] of durationsLargestFirst) {
-                if (durVal <= remaining + 1e-9) {
-                    restNotes.push(new UnprocessedNote(["Rest"], 4, durStr, false));
-                    remaining = round(remaining - durVal);
-                    break;
-                }
-            }
-        }
+        const voice = mainVoices[voiceName];
+        const restNotes = fillDurationWithRests(numMeasures * measureLength);
         processNotes(voice, restNotes);
     }
+    document.querySelectorAll(".voiceSettings").forEach(settings => {
+        const voiceName = settings.dataset.voice;
+        populateVoiceSettings(settings, voiceName);
+    });
     drawAllVoices();
     currentSlug = null;
     currentTitle = null;

@@ -37,11 +37,15 @@ interface MemorySnapshot {
   tiedToNext: boolean;
 }
 
-const numMeasuresMemory: number[] = [];
-let numMeasuresMemoryIndex: number = -1;
+interface GlobalSnapshot {
+  numMeasures: number;
+  timeSignature: [number, number];
+  main: Record<string, MemorySnapshot[]>;
+  harmony: Record<string, MemorySnapshot[]>;
+}
 
-const timeSignatureMemory: [number, number][] = [];
-let timeSignatureMemoryIndex: number = -1;
+const globalMemory: GlobalSnapshot[] = [];
+let globalMemoryIndex: number = -1;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Voice Container Setup
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -74,8 +78,6 @@ const createVoiceContainers = (voiceNames: string[], activeVoice: string = "uppe
 
 createVoiceContainers(["upperVoice", "middleVoice", "lowerVoice", "voice4"]);
 
-containers["harmonyVoice"] = document.getElementById("harmonyVoiceContainer") as HTMLElement;
-
 Object.entries(containers).forEach(([name, container]) => {
   renderers[name] = new Renderer(container, Renderer.Backends.SVG);
   contexts[name] = renderers[name].getContext();
@@ -107,27 +109,50 @@ const copyPartButton        = document.querySelector('.copyPartButton')         
 const pastePartButton       = document.querySelector('.pastePartButton')        as HTMLButtonElement;
 const previousButton        = document.querySelector('.previousButton')         as HTMLButtonElement;
 const nextButton            = document.querySelector('.nextButton')             as HTMLButtonElement;
-const modeSelect            = document.getElementById("modeSelect")             as HTMLSelectElement;
-const randomHarmonyButton   = document.querySelector('.randomHarmonyButton')   as HTMLButtonElement;
-const chordPlayButton       = document.querySelector(".chordPlayButton")        as HTMLButtonElement;
 
 let timeSignature: [number, number] = [4, 4];
 let measureLength: number = timeSignature[0] * (1 / timeSignature[1]);
 let numMeasures: number = 1;
-let mode: string = "Standard";
 let currentLayer: 'main' | 'harmony' = 'main';
 
 document.getElementById('layerToggle')?.addEventListener('click', () => {
   currentLayer = currentLayer === 'main' ? 'harmony' : 'main';
   const btn = document.getElementById('layerToggle') as HTMLButtonElement;
   btn.textContent = currentLayer === 'main' ? 'Main' : 'Harmony';
+  selectedVoices = currentLayer === 'main' ? mainSelectedVoices : harmonySelectedVoices;
+  updateVoiceHighlights();
+
+  document.querySelectorAll('.harmonizeButton').forEach(btn => {
+    (btn as HTMLElement).style.display = currentLayer === 'main' ? '' : 'none';
+  });
+
+
+  // Update voice settings panel to show active layer's settings
+  document.querySelectorAll(".voiceSettings").forEach(settings => {
+    const voiceName = (settings as HTMLElement).dataset.voice!;
+    populateVoiceSettings(settings, voiceName);
+  });
+
+  drawAllVoices();
 });
+
+function updateVoiceHighlights(): void {
+  const activeVoices = getActiveVoices();
+  voiceContainers.forEach(container => {
+    const voiceName = (container as HTMLElement).dataset.name!;
+    const isSelected = selectedVoices.some(voice => voice.name === voiceName);
+    container.classList.toggle('active', isSelected);
+    const settings = document.querySelector(`.voiceSettings[data-voice="${voiceName}"]`) as HTMLElement;
+    if (settings) settings.classList.toggle('active', isSelected);
+  });
+}
 
 class Part {
   name: string;
   pitchRange: string[];
   rhythmRange: number[];
   scale: string[];
+  harmonize: boolean;
   unprocessedNotes: UnprocessedNote[];
   notes: any[][];
   ties: any[][];
@@ -149,6 +174,7 @@ class Part {
     this.pitchRange = pitchRange;
     this.rhythmRange = rhythmRange;
     this.scale = scale;
+    this.harmonize = false;
     this.unprocessedNotes = [];
     this.notes = [];
     this.ties = [];
@@ -160,6 +186,22 @@ class Part {
     this.duration = 0;
     this.requiredWidth = 0;
   }
+}
+
+const defaultPitchRanges: Record<string, string[]> = {
+  upperVoice:  ["C4", "C6"],
+  middleVoice: ["A3", "F5"],
+  lowerVoice:  ["E2", "C4"],
+  voice4:      ["D3", "B5"],
+};
+
+function resetVoiceToDefaults(voice: Part, rhythmRange: number[]): void {
+  voice.pitchRange  = [...defaultPitchRanges[voice.name]];
+  voice.rhythmRange = [...rhythmRange];
+  voice.scale       = ["C", "Chromatic"];
+  voice.harmonize   = false;
+  voice.muted       = false;
+  resetPart(voice);
 }
 
 class UnprocessedNote {
@@ -194,14 +236,27 @@ const upperVoice  = new Part("upperVoice",  ["C4", "C6"]);
 const middleVoice = new Part("middleVoice", ["A3", "F5"]);
 const lowerVoice  = new Part("lowerVoice",  ["E2", "C4"]);
 const voice4      = new Part("voice4",      ["D3", "B5"]);
-const harmonyVoice = new Part("harmonyVoice");
-const voicesMap: Record<string, Part> = { upperVoice, middleVoice, lowerVoice, voice4, harmonyVoice };
+
+const mainVoices: Record<string, Part> = { upperVoice, middleVoice, lowerVoice, voice4 };
+
+const harmonyVoices: Record<string, Part> = {
+  upperVoice:  new Part("upperVoice",  ["C4", "C6"], [0.25, 1]),
+  middleVoice: new Part("middleVoice", ["A3", "F5"], [0.25, 1]),
+  lowerVoice:  new Part("lowerVoice",  ["E2", "C4"], [0.25, 1]),
+  voice4:      new Part("voice4",      ["D3", "B5"], [0.25, 1]),
+};
+
+function getActiveVoices(): Record<string, Part> {
+  return currentLayer === 'main' ? mainVoices : harmonyVoices;
+}
+
+let mainSelectedVoices:    Part[] = [upperVoice];
+let harmonySelectedVoices: Part[] = [harmonyVoices['upperVoice']];
+let selectedVoices: Part[] = mainSelectedVoices;
 
 let clipboard: Record<string, MemorySnapshot[]> = {};
 let totalDuration: number = 0;
 let sampler: any | null = null;
-let selectedVoices: Part[] = [upperVoice];
-
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Mapping
@@ -391,19 +446,16 @@ function populateMaxRhythm(minId: number, selectEl: HTMLSelectElement, selectedI
   });
 }
 
-document.querySelectorAll(".voiceSettings").forEach(settings => {
-  const voiceName = (settings as HTMLElement).dataset.voice!;
-  const voice = voicesMap[voiceName];
-  const rootSelects = settings.querySelectorAll('.rootSelect');
-  const rootSelect  = rootSelects[0] as HTMLSelectElement;
-  const scaleSelect = settings.querySelector('.scaleSelect')  as HTMLSelectElement;
-  const minSelect   = settings.querySelector('.minPitch')     as HTMLSelectElement;
-  const maxSelect   = settings.querySelector('.maxPitch')     as HTMLSelectElement;
-  const minRhythm   = settings.querySelector('.minRhythm')    as HTMLSelectElement;
-  const maxRhythm   = settings.querySelector('.maxRhythm')    as HTMLSelectElement;
-  const muteButton  = settings.querySelector('.muteButton')   as HTMLButtonElement;
-  const midiButton  = settings.querySelector('.midiButton')   as HTMLButtonElement;
-  const musicXMLButton = settings.querySelector('.musicXMLButton') as HTMLButtonElement;
+function populateVoiceSettings(settings: Element, voiceName: string): void {
+  const voice = getActiveVoices()[voiceName];
+  const rootSelect  = settings.querySelectorAll('.rootSelect')[0] as HTMLSelectElement;
+  const scaleSelect = settings.querySelector('.scaleSelect')      as HTMLSelectElement;
+  const minSelect   = settings.querySelector('.minPitch')         as HTMLSelectElement;
+  const maxSelect   = settings.querySelector('.maxPitch')         as HTMLSelectElement;
+  const minRhythm   = settings.querySelector('.minRhythm')        as HTMLSelectElement;
+  const maxRhythm   = settings.querySelector('.maxRhythm')        as HTMLSelectElement;
+  const harmonizeButton = settings.querySelector('.harmonizeButton') as HTMLButtonElement;
+  const muteButton      = settings.querySelector('.muteButton')      as HTMLButtonElement;
 
   populateScaleSelect(scaleSelect);
   if (voice.scale && voice.scale[1]) {
@@ -412,6 +464,7 @@ document.querySelectorAll(".voiceSettings").forEach(settings => {
     scaleSelect.value = "Chromatic";
     voice.scale = [(voice.scale && voice.scale[0]) || "C", "Chromatic"];
   }
+  rootSelect.value = voice.scale[0];
 
   const initialMin = toPitchStr(voice.pitchRange?.[0] || "E3");
   const initialMax = toPitchStr(voice.pitchRange?.[1] || "E6");
@@ -427,32 +480,74 @@ document.querySelectorAll(".voiceSettings").forEach(settings => {
   minRhythm.value = String(initialMinRhythm);
   maxRhythm.value = String(initialMaxRhythm);
 
-  rootSelect?.addEventListener('change', () => { voice.scale[0] = rootSelect.value; });
-  scaleSelect.addEventListener('change', () => { voice.scale[1] = scaleSelect.value; });
+  if (harmonizeButton) harmonizeButton.classList.toggle('active', voice.harmonize);
+  if (muteButton) muteButton.classList.toggle('active', voice.muted);
+}
 
-  minSelect.addEventListener("change", () => {
-    populateMaxFor(minSelect.value, maxSelect, maxSelect.value);
-    voice.pitchRange[0] = minSelect.value;
-  });
-  maxSelect.addEventListener("change", () => {
-    populateMinFor(maxSelect.value, minSelect, minSelect.value);
-    voice.pitchRange[1] = maxSelect.value;
-  });
-  minRhythm.addEventListener("change", () => {
-    voice.rhythmRange[0] = parseFloat(minRhythm.value);
-    populateMaxRhythm(voice.rhythmRange[0], maxRhythm, voice.rhythmRange[1]);
-  });
-  maxRhythm.addEventListener("change", () => {
-    voice.rhythmRange[1] = parseFloat(maxRhythm.value);
-    populateMinRhythm(voice.rhythmRange[1], minRhythm, voice.rhythmRange[0]);
-  });
+document.querySelectorAll(".voiceSettings").forEach(settings => {
+  const voiceName = (settings as HTMLElement).dataset.voice!;
+  const muteButton     = settings.querySelector('.muteButton')     as HTMLButtonElement;
+  const midiButton     = settings.querySelector('.midiButton')     as HTMLButtonElement;
+  const musicXMLButton = settings.querySelector('.musicXMLButton') as HTMLButtonElement;
+  const rootSelect     = settings.querySelectorAll('.rootSelect')[0] as HTMLSelectElement;
+  const scaleSelect    = settings.querySelector('.scaleSelect')    as HTMLSelectElement;
+  const minSelect      = settings.querySelector('.minPitch')       as HTMLSelectElement;
+  const maxSelect      = settings.querySelector('.maxPitch')       as HTMLSelectElement;
+  const minRhythm      = settings.querySelector('.minRhythm')      as HTMLSelectElement;
+  const maxRhythm      = settings.querySelector('.maxRhythm')      as HTMLSelectElement;
+  const harmonizeButton = settings.querySelector('.harmonizeButton') as HTMLButtonElement;
+
+  // Initialize with main layer values
+  populateVoiceSettings(settings, voiceName);
+
+  // Event listeners read active layer's voice at fire time
+  rootSelect?.addEventListener('change', () => {
+  getActiveVoices()[voiceName].scale[0] = rootSelect.value;
+  saveToLocalStorage();
+});
+scaleSelect.addEventListener('change', () => {
+  getActiveVoices()[voiceName].scale[1] = scaleSelect.value;
+  saveToLocalStorage();
+});
+minSelect.addEventListener("change", () => {
+  const voice = getActiveVoices()[voiceName];
+  populateMaxFor(minSelect.value, maxSelect, maxSelect.value);
+  voice.pitchRange[0] = minSelect.value;
+  saveToLocalStorage();
+});
+maxSelect.addEventListener("change", () => {
+  const voice = getActiveVoices()[voiceName];
+  populateMinFor(maxSelect.value, minSelect, minSelect.value);
+  voice.pitchRange[1] = maxSelect.value;
+  saveToLocalStorage();
+});
+minRhythm.addEventListener("change", () => {
+  const voice = getActiveVoices()[voiceName];
+  voice.rhythmRange[0] = parseFloat(minRhythm.value);
+  populateMaxRhythm(voice.rhythmRange[0], maxRhythm, voice.rhythmRange[1]);
+  saveToLocalStorage();
+});
+maxRhythm.addEventListener("change", () => {
+  const voice = getActiveVoices()[voiceName];
+  voice.rhythmRange[1] = parseFloat(maxRhythm.value);
+  populateMinRhythm(voice.rhythmRange[1], minRhythm, voice.rhythmRange[0]);
+  saveToLocalStorage();
+});
   muteButton.addEventListener("click", () => {
     muteButton.classList.toggle("active");
-    voice.muted = muteButton.classList.contains("active");
+    getActiveVoices()[voiceName].muted = muteButton.classList.contains("active");
+    saveToLocalStorage();
   });
-  midiButton.addEventListener("click",      () => exportVoiceToMidi(voice));
-  musicXMLButton.addEventListener("click",  () => exportVoiceToMusicXML(voice));
+  harmonizeButton.addEventListener('click', () => {         // ← new, replaces old harmonizeSelect.addEventListener('change', ...)
+    harmonizeButton.classList.toggle('active');
+    mainVoices[voiceName].harmonize = harmonizeButton.classList.contains('active');
+    saveToLocalStorage();
+  });
+  midiButton.addEventListener("click",     () => exportVoiceToMidi(getActiveVoices()[voiceName]));
+  musicXMLButton.addEventListener("click", () => exportVoiceToMusicXML(getActiveVoices()[voiceName]));
 });
+
+
 
 document.addEventListener('click', (e) => {
   const bar = document.getElementById('measureBar');
@@ -460,7 +555,7 @@ document.addEventListener('click', (e) => {
     selectedMeasureIndex = null;
     drawMeasureBar(
       getGlobalMeasureWidths(
-        Object.values(voicesMap).filter(voice  => voice  !== harmonyVoice)
+        Object.values(getActiveVoices())
       )
     );
   }
@@ -565,37 +660,37 @@ function bindVoiceAction(button: HTMLButtonElement | null, action: (part: Part) 
 }
 
 voiceContainers.forEach(container => {
-  if ((container as HTMLElement).dataset.name === "harmonyVoice") return;
   container.addEventListener("click", () => {
     const voiceName = (container as HTMLElement).dataset.name!;
-    const voiceObj = voicesMap[voiceName];
+    const voiceObj = getActiveVoices()[voiceName];
     container.classList.toggle("active");
+    const settings = document.querySelector(`.voiceSettings[data-voice="${voiceName}"]`) as HTMLElement;
+    if (settings) settings.classList.toggle("active");
     if (container.classList.contains("active")) {
-      selectedVoices.push(voiceObj);
+      if (currentLayer === 'main') mainSelectedVoices.push(voiceObj);
+      else harmonySelectedVoices.push(voiceObj);
     } else {
-      selectedVoices = selectedVoices.filter(voice => voice.name !== voiceName);
+      if (currentLayer === 'main') mainSelectedVoices = mainSelectedVoices.filter(voice => voice.name !== voiceName);
+      else harmonySelectedVoices = harmonySelectedVoices.filter(voice => voice.name !== voiceName);
     }
+    selectedVoices = currentLayer === 'main' ? mainSelectedVoices : harmonySelectedVoices;
   });
 });
 
 bpmSlider.addEventListener("input", () => {
   bpmValueDisplay.textContent = bpmSlider.value;
 });
-modeSelect.addEventListener("change", () => {
-  mode = modeSelect.value;
-});
 
-function setupPlayButton(button: HTMLButtonElement | null, parts: Part[]): void {
+function setupPlayButton(button: HTMLButtonElement | null, getParts: () => Part[]): void {
   if (!button) return;
   button.addEventListener("click", () => {
     button.disabled = true;
     button.classList.add("active");
-    setupSampler().then(() => playAllParts(parts, button));
+    setupSampler().then(() => playAllParts(getParts(), button));
   });
 }
 
-setupPlayButton(playButton,      [upperVoice, middleVoice, lowerVoice, voice4]);
-setupPlayButton(chordPlayButton, [harmonyVoice]);
+setupPlayButton(playButton, () => Object.values(getActiveVoices()));
 
 bindVoiceAction(generatePhraseButton, part => {
   const savedNotes = [...part.unprocessedNotes];
@@ -622,7 +717,6 @@ copyPartButton?.addEventListener("click",  () => copyPart());
 pastePartButton?.addEventListener("click", () => { pastePart(); updateMemory(); });
 previousButton?.addEventListener("click",  () => accessMemory(-1));
 nextButton?.addEventListener("click",      () => accessMemory(1));
-randomHarmonyButton?.addEventListener("click", generateHarmony);
 
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -656,17 +750,20 @@ function getAllowedPitches(voice: Part, noteDuration: number): string[] {
     return pitchClass !== undefined && scale.includes((pitchClass - rootIndex + 12) % 12);
   });
 
-  if (mode === "Harmony") {
+  if (voice.harmonize) {
+    const voiceHarmony = harmonyVoices[voice.name];
+    if (!voiceHarmony || !voiceHarmony.unprocessedNotes.length) return scalePitches;
+
     let durationSearched = 0;
     let currentChord: UnprocessedNote | null = null;
-    for (let i = 0; i < harmonyVoice.unprocessedNotes.length; ++i) {
-      currentChord = harmonyVoice.unprocessedNotes[i];
+    for (let i = 0; i < voiceHarmony.unprocessedNotes.length; ++i) {
+      currentChord = voiceHarmony.unprocessedNotes[i];
       durationSearched += durationMapping[currentChord.duration];
-      if (durationSearched <= totalDuration && i + 1 < harmonyVoice.unprocessedNotes.length) continue;
+      if (durationSearched <= totalDuration && i + 1 < voiceHarmony.unprocessedNotes.length) continue;
       const currentOverlap = durationSearched - totalDuration;
       const nextOverlap = noteDuration - currentOverlap;
-      if (nextOverlap > currentOverlap && i + 1 < harmonyVoice.unprocessedNotes.length) {
-        currentChord = harmonyVoice.unprocessedNotes[i + 1];
+      if (nextOverlap > currentOverlap && i + 1 < voiceHarmony.unprocessedNotes.length) {
+        currentChord = voiceHarmony.unprocessedNotes[i + 1];
       }
       const chordNotes = currentChord.noteName;
       return scalePitches.filter(pitch => chordNotes.includes(pitch.slice(0, -1)));
@@ -893,62 +990,62 @@ function resetPart(part: Part): void {
 // Memory
 /////////////////////////////////////////////////////////////////////////////////////
 
-function updateMemory(): void {
-  const voicesToSave = Object.values(voicesMap).filter(voice  => voice  !== harmonyVoice);
+function snapshotVoiceNotes(voice: Part): MemorySnapshot[] {
+  return voice.unprocessedNotes.map(note => ({
+    noteName: [...note.noteName],
+    octave: note.octave,
+    duration: note.duration,
+    dotted: note.dotted,
+    tupletInfo: note.tupletInfo ? { ...note.tupletInfo } : null,
+    tiedToNext: note.tiedToNext,
+  }));
+}
 
-  for (const voice of voicesToSave) {
-    voice.memory.splice(voice.currentMemoryIndex + 1);
-    const snapshot: MemorySnapshot[] = voice.unprocessedNotes.map(note => ({
-      noteName: [...note.noteName],
-      octave: note.octave,
-      duration: note.duration,
-      dotted: note.dotted,
-      tupletInfo: note.tupletInfo ? { ...note.tupletInfo } : null,
-      tiedToNext: note.tiedToNext,
-    }));
-    voice.memory.push(snapshot);
-    voice.currentMemoryIndex = voice.memory.length - 1;
+function updateMemory(): void {
+  globalMemory.splice(globalMemoryIndex + 1);
+
+  const snapshot: GlobalSnapshot = {
+    numMeasures,
+    timeSignature: [...timeSignature] as [number, number],
+    main: {},
+    harmony: {},
+  };
+  for (const voiceName of voices) {
+    snapshot.main[voiceName] = snapshotVoiceNotes(mainVoices[voiceName]);
+    snapshot.harmony[voiceName] = snapshotVoiceNotes(harmonyVoices[voiceName]);
   }
 
-  numMeasuresMemory.splice(numMeasuresMemoryIndex + 1);
-  numMeasuresMemory.push(numMeasures);
-  numMeasuresMemoryIndex = numMeasuresMemory.length - 1;
-
-  timeSignatureMemory.splice(timeSignatureMemoryIndex + 1);
-  timeSignatureMemory.push([...timeSignature] as [number, number]);
-  timeSignatureMemoryIndex = timeSignatureMemory.length - 1;
+  globalMemory.push(snapshot);
+  globalMemoryIndex = globalMemory.length - 1;
 
   if (typeof saveToLocalStorage === 'function') saveToLocalStorage();
 }
 
+function restoreVoiceFromSnapshot(voice: Part, snapshot: MemorySnapshot[]): void {
+  resetPart(voice);
+  const notes = snapshot.map(s => {
+    const note = new UnprocessedNote([...s.noteName], s.octave, s.duration, s.dotted, s.tiedToNext);
+    if (s.tupletInfo) note.tupletInfo = { ...s.tupletInfo };
+    return note;
+  });
+  processNotes(voice, notes);
+}
+
 function accessMemory(indexDifference: number): void {
-  const newTimeSigIdx = timeSignatureMemoryIndex + indexDifference;
-  if (newTimeSigIdx >= 0 && newTimeSigIdx < timeSignatureMemory.length) {
-    timeSignatureMemoryIndex = newTimeSigIdx;
-    timeSignature = [...timeSignatureMemory[newTimeSigIdx]] as [number, number];
-    measureLength = timeSignature[0] / timeSignature[1];
+  const newIdx = globalMemoryIndex + indexDifference;
+  if (newIdx < 0 || newIdx >= globalMemory.length) return;
+  globalMemoryIndex = newIdx;
+  const snapshot = globalMemory[newIdx];
+
+  timeSignature = [...snapshot.timeSignature] as [number, number];
+  measureLength = timeSignature[0] / timeSignature[1];
+  numMeasures = snapshot.numMeasures;
+
+  for (const voiceName of voices) {
+    restoreVoiceFromSnapshot(mainVoices[voiceName], snapshot.main[voiceName]);
+    restoreVoiceFromSnapshot(harmonyVoices[voiceName], snapshot.harmony[voiceName]);
   }
 
-  const newMeasureIdx = numMeasuresMemoryIndex + indexDifference;
-  if (newMeasureIdx >= 0 && newMeasureIdx < numMeasuresMemory.length) {
-    numMeasuresMemoryIndex = newMeasureIdx;
-    numMeasures = numMeasuresMemory[newMeasureIdx];
-  }
-
-  const voicesToRestore = Object.values(voicesMap).filter(voice  => voice  !== harmonyVoice);
-  for (const voice of voicesToRestore) {
-    const newIdx = voice.currentMemoryIndex + indexDifference;
-    if (newIdx < 0 || newIdx >= voice.memory.length) continue;
-    voice.currentMemoryIndex = newIdx;
-    const snapshot = voice.memory[newIdx];
-    resetPart(voice);
-    const notes = snapshot.map(s => {
-      const note = new UnprocessedNote([...s.noteName], s.octave, s.duration, s.dotted, s.tiedToNext);
-      if (s.tupletInfo) note.tupletInfo = { ...s.tupletInfo };
-      return note;
-    });
-    processNotes(voice, notes);
-  }
   drawAllVoices();
 }
 
@@ -1034,9 +1131,7 @@ function getTupletsForMeasure(part: Part, measureIndex: number): any[] {
 }
 
 function drawAllVoices(includeHarmony: boolean = false): void {
-  const parts = includeHarmony
-    ? [harmonyVoice]
-    : Object.values(voicesMap).filter(voiceObj => voiceObj !== harmonyVoice);
+  const parts = Object.values(getActiveVoices());
 
   const globalMeasureWidths = getGlobalMeasureWidths(parts);
   const requiredWidth = globalMeasureWidths.reduce((a, b) => a + b, 0) + 100;
@@ -1218,7 +1313,7 @@ function drawMeasureBar(measureWidths: number[]): void {
 
   // Check if any tuplet would cross a barline with new time signature
   for (const voiceName of voices) {
-    const voice = voicesMap[voiceName];
+    const voice = getActiveVoices()[voiceName];
     let pos = 0;
     for (const note of voice.unprocessedNotes) {
       if (note.tupletInfo) {
@@ -1249,7 +1344,7 @@ function drawMeasureBar(measureWidths: number[]): void {
 
   // Reprocess all voices with new measureLength
   for (const voiceName of voices) {
-    const voice = voicesMap[voiceName];
+    const voice = getActiveVoices()[voiceName];
     const savedNotes = [...voice.unprocessedNotes];
     resetPart(voice);
     processNotes(voice, savedNotes);
@@ -1268,7 +1363,7 @@ function drawMeasureBar(measureWidths: number[]): void {
 
   // Update numMeasures to match actual measure count after reprocessing
   numMeasures = Math.max(
-    ...voices.map(voiceName => voicesMap[voiceName].notes.length),
+    ...voices.map(voiceName => getActiveVoices()[voiceName].notes.length),
     1
   );
 
@@ -1372,7 +1467,7 @@ function insertMeasureAfter(measureIndex: number): void {
   const insertAtDur = round((measureIndex + 1) * measureLength);
 
   for (const voiceName of voices) {
-    const voice = voicesMap[voiceName];
+    const voice = getActiveVoices()[voiceName];
     if (!voice.unprocessedNotes.length) continue;
 
     const newNotes: UnprocessedNote[] = [];
@@ -1433,14 +1528,14 @@ function insertMeasureAfter(measureIndex: number): void {
 }
 
 function deleteMeasure(measureIndex: number): void {
-  const totalMeasures = Math.max(...Object.values(voicesMap)
-    .filter(voice  => voice  !== harmonyVoice && voice .notes.length > 0)
+  const totalMeasures = Math.max(...Object.values(getActiveVoices())
+    .filter(voice  => voice .notes.length > 0)
     .map(voice  => voice .notes.length), 1);
 
   if (totalMeasures <= 1) {
     for (const voiceName of voices) {
-      resetPart(voicesMap[voiceName]);
-      processNotes(voicesMap[voiceName], fillDurationWithRests(measureLength));
+      resetPart(getActiveVoices()[voiceName]);
+      processNotes(getActiveVoices()[voiceName], fillDurationWithRests(measureLength));
     }
     drawAllVoices();
     updateMemory();
@@ -1451,7 +1546,7 @@ function deleteMeasure(measureIndex: number): void {
   const endDur = round(startDur + measureLength);
 
   for (const voiceName of voices) {
-    const voice = voicesMap[voiceName];
+    const voice = getActiveVoices()[voiceName];
     if (!voice.unprocessedNotes.length) continue;
 
     const split: UnprocessedNote[] = [];
@@ -1633,12 +1728,14 @@ function separateVoice(): void {
   totalDuration = 0;
 
   for (const note of voiceToSeparate.unprocessedNotes) {
+    const baseDuration = getNoteDuration(note);
+
     const candidateVoices: string[] = [];
     for (const voiceName of voices) {
       const voice = selectedVoices.find(selected => selected.name === voiceName);
       if (!voice) continue;
       if (note.isRest) { candidateVoices.push(voiceName); continue; }
-      const allowedPitches = getAllowedPitches(voicesMap[voiceName], durationMapping[note.duration]);
+      const allowedPitches = getAllowedPitches(getActiveVoices()[voiceName], baseDuration);
       if (allowedPitches.includes(note.noteName[0] + note.octave)) candidateVoices.push(voiceName);
     }
 
@@ -1655,7 +1752,12 @@ function separateVoice(): void {
       newNotesPerVoice[voiceName].push(newNote);
     }
 
-    totalDuration += durationMapping[note.duration] || 0;
+    if (note.tupletInfo) {
+      const [numTupletNotes, notesOccupied] = note.tupletInfo.ratio;
+      totalDuration += baseDuration * notesOccupied / numTupletNotes;
+    } else {
+      totalDuration += baseDuration;
+    }
   }
 
   for (const voiceName of voices) {
@@ -2141,6 +2243,7 @@ function complicateVoice(voice: Part): void {
   const originalNotes = [...voice.unprocessedNotes];
   const newNotes: UnprocessedNote[] = [];
   const seenIds = new Set<number>();
+  let position = 0;
 
   for (const note of originalNotes) {
     if (note.tupletInfo) {
@@ -2151,6 +2254,7 @@ function complicateVoice(voice: Part): void {
       const savedNotes = [...voice.unprocessedNotes];
       const savedTuplets = [...voice.tuplets];
       resetPart(voice);
+      totalDuration = position;
       generatePhrase(voice, totalTupletDuration, false);
       const subNotes = [...voice.unprocessedNotes];
       voice.unprocessedNotes = savedNotes;
@@ -2166,11 +2270,15 @@ function complicateVoice(voice: Part): void {
         }
       });
 
+      position = round(position + totalTupletDuration);
+
     } else if (note.duration !== "32" && Math.random() < 0.5) {
+      const noteDur = getNoteDuration(note);
       const savedNotes = [...voice.unprocessedNotes];
       const savedTuplets = [...voice.tuplets];
       resetPart(voice);
-      generatePhrase(voice, getNoteDuration(note), false);
+      totalDuration = position;
+      generatePhrase(voice, noteDur, false);
       const subNotes = [...voice.unprocessedNotes];
       voice.unprocessedNotes = savedNotes;
       voice.tuplets = savedTuplets;
@@ -2185,8 +2293,11 @@ function complicateVoice(voice: Part): void {
         }
       });
 
+      position = round(position + noteDur);
+
     } else {
       newNotes.push(note);
+      position = round(position + getNoteDuration(note));
     }
   }
 
@@ -2258,7 +2369,6 @@ async function setupSampler(): Promise<void> {
 /////////////////////////////////////////////////////////////////////////////////////
 
 function generateHarmony(): void {
-  resetPart(harmonyVoice);
   const durationValues = Object.values(durationMapping);
   const noteValues = Object.values(noteMapping).filter(value => value < 12);
   const chords = Object.values(chordMapping);
@@ -2284,8 +2394,6 @@ function generateHarmony(): void {
     allNotes.push(new UnprocessedNote(chordNotes, 4, durationStr, isDotted));
     currentDuration = round(currentDuration + duration);
   }
-
-  processNotes(harmonyVoice, allNotes);
   drawAllVoices(true);
 }
 
@@ -2377,13 +2485,13 @@ function exportVoiceToMusicXML(voice: Part): void {
 }
 
 window.addEventListener('load', () => {
-  const hasExistingNotes = Object.values(voicesMap).some(
-  voice => voice !== harmonyVoice && voice.unprocessedNotes.length > 0
+  const hasExistingNotes = Object.values(getActiveVoices()).some(
+  voice => voice.unprocessedNotes.length > 0
 );
 if (!hasExistingNotes) {
     for (const voiceName of voices) {
-      resetPart(voicesMap[voiceName]);
-      processNotes(voicesMap[voiceName], fillDurationWithRests(numMeasures * measureLength));
+      resetPart(getActiveVoices()[voiceName]);
+      processNotes(getActiveVoices()[voiceName], fillDurationWithRests(numMeasures * measureLength));
     }
   }
   drawAllVoices();

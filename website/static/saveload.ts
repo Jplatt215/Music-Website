@@ -15,6 +15,47 @@ const saveButton           = document.querySelector('.saveButton')           as 
 const newCompositionButton = document.querySelector('.newCompositionButton') as HTMLButtonElement;
 const compositionList      = document.getElementById('compositionList')      as HTMLElement;
 const currentCompositionTitle = document.getElementById('currentCompositionTitle') as HTMLElement;
+const projectTitleBtn = document.getElementById('projectTitleBtn') as HTMLButtonElement;
+const createTabBtn = document.getElementById('createTabBtn') as HTMLButtonElement;
+const editTabBtn   = document.getElementById('editTabBtn')   as HTMLButtonElement;
+const loadTabBtn   = document.getElementById('loadTabBtn')   as HTMLButtonElement;
+let previousTabId: string = 'input-menu';
+
+projectTitleBtn?.addEventListener('click', () => {
+  const loadMenu = document.getElementById('load-menu') as HTMLElement;
+  const isLoadOpen = !loadMenu.classList.contains('hidden');
+
+  if (isLoadOpen) {
+    // Switch back to Create/Edit
+    loadTabBtn.classList.add('hidden');
+    loadTabBtn.classList.remove('active');
+    createTabBtn.classList.remove('hidden');
+    editTabBtn.classList.remove('hidden');
+    loadMenu.classList.add('hidden');
+    projectTitleBtn.classList.remove('active');
+
+    const prevBtn = document.querySelector(`.tab-btn[data-target="${previousTabId}"]`) as HTMLButtonElement;
+    prevBtn?.classList.add('active');
+    document.getElementById(previousTabId)?.classList.remove('hidden');
+
+  } else {
+    // Remember which tab was active, then switch to Load
+    const activeBtn = document.querySelector('.tab-btn.active') as HTMLButtonElement;
+    previousTabId = activeBtn?.dataset.target ?? 'input-menu';
+
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+
+    createTabBtn.classList.add('hidden');
+    editTabBtn.classList.add('hidden');
+    loadTabBtn.classList.remove('hidden');
+    loadTabBtn.classList.add('active');
+
+    loadMenu.classList.remove('hidden');
+    projectTitleBtn.classList.add('active');
+    loadCompositionList();
+  }
+});
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helpers

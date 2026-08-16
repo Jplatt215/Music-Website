@@ -193,13 +193,85 @@ body {
     background-color: #575757;
 }
 
+.topBarRow {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  padding-left: 50px;
+  margin-top: 20px;
+  box-sizing: border-box;
+}
+
+.topBarLeft {
+  flex: 0 0 350px;
+  width: 350px;
+  min-width: 350px;
+  max-width: 350px;
+  padding-left: 10px;
+  padding-right: 10px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+}
+
+.topBarRight {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-left: 50px;
+  padding-right: 50px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.projectTitleBtn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.projectTitleBtn.active {
+  background-color: hsl(0, 0%, 86%);
+}
+
+.projectTitle {
+  font-size: 18px;
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  display: block;
+}
+
+.selectControls {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.topBarRow .playButton {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .header {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
   width: 100%;
-  margin-left: 50px;
-  margin-top: 50px;
+  padding-left: 50px;
+  margin-top: 20px;
+  box-sizing: border-box;
   overflow: hidden;
 }
 
@@ -215,14 +287,6 @@ body {
   overflow-x: hidden;
 }
 
-.output-container {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 70vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
 #voiceScrollWrapper {
   overflow-x: auto;
   overflow-y: visible;
@@ -232,16 +296,10 @@ body {
 }
 
 #output {
-  display: flex;
-  flex-direction: column;
-  width: max-content;
-}
-
-.voiceWrapper {
-  display: flex;
-  align-items: flex-start;
-  width: max-content;
-}
+    display: flex;
+    flex-direction: column;
+    width: max-content;
+  }
 
 .voiceContainer {
   position: relative;
@@ -251,7 +309,6 @@ body {
   width: calc(100vw - 350px);
   min-width: max-content;
 }
-
 
 .row {
   display: flex;
@@ -279,24 +336,13 @@ body {
 }
 
 .output-container {
-  height: 85vh;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 90vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   padding-left: 50px;
-  overflow: hidden;
-}
-
-#voiceScrollWrapper {
-  overflow-x: auto;
-  overflow-y: visible;
-  width: 94%;
-  flex: 1 1 auto;
-}
-
-#output {
-  display: flex;
-  flex-direction: column;
-  min-width: max-content;
 }
 
 button.active {
@@ -326,25 +372,31 @@ button.active {
     line-height: 16px;
 }
 
+.previousButton{
+    font-size: 30px;  
+    height: 24px;
+    width: 90px;
+    line-height: 16px;
+    background-color: hsl(0, 0%, 86%);
+}
+.nextButton{
+    font-size: 30px;  
+    height: 24px;
+    width: 90px;
+    line-height: 16px;
+    background-color: hsl(0, 0%, 86%);
+}
+
 .playButton{
     font-size: 18px;  
     height: 24px;
+    width: 300px;
     line-height: 16px;
-}
-.voiceContainer {
-  position: relative;
-  overflow: visible;
-  height: 300px;
-  background: white;
+    background-color: hsl(0, 0%, 86%);
 }
 
 .voiceContainer svg {
   display: block;
-}
-
-
-.voiceWrapper{
-  width: 85vw
 }
 
 #upperVoiceContainer, #middleVoiceContainer, #lowerVoiceContainer, #voice4Container {
@@ -369,13 +421,16 @@ button.active {
 #bpmDisplay {
   display: inline-block;
   min-width: 30px; 
+  background-color: hsl(0, 0%, 86%);
+  border-width: 0px;
 }
 #bpmSlider {
-  width: 270px;
+  width: 170px;
   height: 6px;
   margin-left: 15px;
   background: #575757;
   appearance: none; 
+  outline: none;
 }
 
 #bpmSlider::-webkit-slider-runnable-track {
@@ -389,15 +444,16 @@ button.active {
   width: 13px;
   height: 13px;
   background: #575757;
-  border-radius: 50%;
+  border-radius: 0%;
   cursor: pointer;
   margin-top: -3.5px; 
 }
 
 .voiceWrapper {
-  display: flex;
-  align-items: flex-start; 
-}
+    display: flex;
+    align-items: flex-start;
+    width: max-content;
+  }
 
 .voiceSettings {
   position: sticky;
@@ -465,18 +521,12 @@ button.active {
     background-color: #d3d3d3;
 }
 
-
-
-.menu {
-    flex: 0 0 auto; 
-    width: 300px;   
-}
-
-
-
 .tabs {
   display: flex;
   width: 100%;
+}
+.tabs.hidden {
+  display: none;
 }
 
 .tab-btn {
@@ -499,7 +549,10 @@ button.active {
   box-sizing: border-box;
 }
 
-
+#loadTabBtn.active {
+  background: #575757;
+  color: antiquewhite;
+}
 
 
 .input-menu,

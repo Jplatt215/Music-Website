@@ -12,6 +12,41 @@ const saveButton = document.querySelector('.saveButton');
 const newCompositionButton = document.querySelector('.newCompositionButton');
 const compositionList = document.getElementById('compositionList');
 const currentCompositionTitle = document.getElementById('currentCompositionTitle');
+const projectTitleBtn = document.getElementById('projectTitleBtn');
+const createTabBtn = document.getElementById('createTabBtn');
+const editTabBtn = document.getElementById('editTabBtn');
+const loadTabBtn = document.getElementById('loadTabBtn');
+let previousTabId = 'input-menu';
+projectTitleBtn?.addEventListener('click', () => {
+    const loadMenu = document.getElementById('load-menu');
+    const isLoadOpen = !loadMenu.classList.contains('hidden');
+    if (isLoadOpen) {
+        // Switch back to Create/Edit
+        loadTabBtn.classList.add('hidden');
+        loadTabBtn.classList.remove('active');
+        createTabBtn.classList.remove('hidden');
+        editTabBtn.classList.remove('hidden');
+        loadMenu.classList.add('hidden');
+        projectTitleBtn.classList.remove('active');
+        const prevBtn = document.querySelector(`.tab-btn[data-target="${previousTabId}"]`);
+        prevBtn?.classList.add('active');
+        document.getElementById(previousTabId)?.classList.remove('hidden');
+    }
+    else {
+        // Remember which tab was active, then switch to Load
+        const activeBtn = document.querySelector('.tab-btn.active');
+        previousTabId = activeBtn?.dataset.target ?? 'input-menu';
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+        createTabBtn.classList.add('hidden');
+        editTabBtn.classList.add('hidden');
+        loadTabBtn.classList.remove('hidden');
+        loadTabBtn.classList.add('active');
+        loadMenu.classList.remove('hidden');
+        projectTitleBtn.classList.add('active');
+        loadCompositionList();
+    }
+});
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

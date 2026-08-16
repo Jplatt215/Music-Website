@@ -16,7 +16,7 @@
 <title>Automated Composition</title>
 </head>
 <body>
-  
+
   <div class="navbar-main">
     <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
     <a class="nav-item nav-link" id="scales" href="/scales">Scale Calculator</a>
@@ -67,15 +67,35 @@
   </div>
 </div>
 
+  <!-- Top bar: project title (static) + tempo + play. Always visible, regardless of tab. -->
+  <div class="topBarRow">
+  <div class="topBarLeft">
+  <button class="projectTitleBtn" id="projectTitleBtn">
+    <span id="currentCompositionTitle" class="projectTitle">Untitled</span>
+  </button>
+</div>
+  <div class="topBarRight">
+    <div class="selectControls">
+      <button class="previousButton">←</button>
+      <button class="nextButton">→</button>
+    </div>
+    <button class="playButton">⏵</button>
+    <button id="bpmDisplay">Tempo: <span id="bpmValue">120</span> BPM
+      <input type="range" id="bpmSlider" min="30" max="180" value="120" />
+    </button>
+  </div>
+</div>
+
   <div class="header">
     <div class="menu">
       <!-- Tabs -->
       <div class="tabs">
-        <button class="tab-btn active" data-target="input-menu">Create</button>
-        <button class="tab-btn" data-target="load-menu">Load</button>
+        <button class="tab-btn active" data-target="input-menu" id="createTabBtn">Create</button>
+        <button class="tab-btn" data-target="edit-menu" id="editTabBtn">Edit</button>
+        <button class="tab-btn hidden" data-target="load-menu" id="loadTabBtn">Load</button>
       </div>
 
-      <!-- Input Menu -->
+      <!-- Create tab -->
       <div id="input-menu" class="tab-content">
         <div class="buttonDescription">Generate</div>
         <div class="row">
@@ -122,15 +142,15 @@
             <button class="shiftButton" style="width: 100%;">Shift</button>
             <select id="shiftSelect" size="8" style="display:none; position: absolute; top: 100%; left: 0; width: 100%; z-index: 9999;">
               <option value="w">𝅝</option>
-              <option value="hd" selected>𝅗𝅥.</option>
-              <option value="h">𝅗𝅥</option>
-              <option value="qd">𝅘𝅥.</option>
-              <option value="q">𝅘𝅥</option>
-              <option value="8d">𝅘𝅥𝅮.</option>
-              <option value="8">𝅘𝅥𝅮</option>
-              <option value="16d">𝅘𝅥𝅯.</option>
-              <option value="16">𝅘𝅥𝅯</option>
-              <option value="32">𝅘𝅥𝅰</option>
+              <option value="hd" selected>𝅗𝅥.</option>
+              <option value="h">𝅗𝅥</option>
+              <option value="qd">𝅘𝅥.</option>
+              <option value="q">𝅘𝅥</option>
+              <option value="8d">𝅘𝅥𝅮.</option>
+              <option value="8">𝅘𝅥𝅮</option>
+              <option value="16d">𝅘𝅥𝅯.</option>
+              <option value="16">𝅘𝅥𝅯</option>
+              <option value="32">𝅘𝅥𝅰</option>
             </select>
           </div>
           <!-- Transpose -->
@@ -157,63 +177,45 @@
           <div style="flex: 1;"><button class="simplifyButton" style="width: 100%;">Simplify</button></div>
           <div style="flex: 1;"><button class="complicateButton" style="width: 100%;">Complicate</button></div>
         </div>
-
-        <div class="buttonDescription">Play</div>
-        <div class="row">
-          <button id="bpmDisplay">Tempo: <span id="bpmValue">120</span> BPM
-            <input type="range" id="bpmSlider" min="30" max="180" value="120" />
-          </button>
-        </div>
-        <div class="row"><button class="playButton">⏵</button></div>
-
-        <div class="buttonDescription">Copy</div>
-        <div class="row">
-          <button class="copyPartButton">Copy</button>
-          <button class="pastePartButton">Paste</button>
-        </div>
-
-        <div class="buttonDescription">Select</div>
-        <div class="row">
-          <button class="previousButton">←</button>
-          <button class="nextButton">→</button>
-        </div>
       </div>
 
-      <!-- Load Menu -->
-<div id="load-menu" class="tab-content hidden">
-  <div id="notLoggedInMsg" class="buttonDescription">
-    Log in to save and load compositions
-  </div>
-  <div id="loggedInLoad" class="hidden">
+      <!-- Edit tab: placeholder for now -->
+      <div id="edit-menu" class="tab-content hidden">
 
-    <!-- Current project -->
-    <div class="buttonDescription" style="margin-bottom: 4px;">
-      Current Project: <span id="currentCompositionTitle">Untitled</span>
+      </div>
+
+      <!-- Load tab -->
+      <div id="load-menu" class="tab-content hidden">
+        <div id="notLoggedInMsg" class="buttonDescription">
+          Log in to save and load compositions
+        </div>
+        <div id="loggedInLoad" class="hidden">
+
+          <div class="row">
+            <button class="saveButton" style="width: 100%;">💾 Save</button>
+          </div>
+
+          <!-- Load bank -->
+          <div class="buttonDescription">Compositions</div>
+          <div id="compositionList" style="
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #575757;
+            background: white;
+          "></div>
+
+          <!-- Bottom actions -->
+           <div class="buttonDescription">File</div>
+          <div class="row">
+            <button class="newCompositionButton" style="flex: 1;">+ New</button>
+            <button class="deleteCompositionButton" style="flex: 1; color: red;">🗑 Delete</button>
+          </div>
+
+        </div>
+      </div>
     </div>
-    <div class="row" style="margin-bottom: 8px;">
-      <button class="saveButton" style="width: 100%;">💾 Save</button>
-    </div>
 
-    <!-- Load bank -->
-    <div class="buttonDescription" style="margin-top: 8px;">Load</div>
-    <div id="compositionList" style="
-      max-height: 200px;
-      overflow-y: auto;
-      border: 1px solid #ccc;
-      background: white;
-    "></div>
 
-    <!-- Bottom actions -->
-    <div class="row" style="margin-top: 8px; gap: 4px;">
-      <button class="newCompositionButton" style="flex: 1;">+ New</button>
-      <button class="deleteCompositionButton" style="flex: 1; color: red;">🗑 Delete</button>
-    </div>
-
-  </div>
-</div>
-</div>
-        
-    
     <!-- Output -->
 <div class="output-container">
   <div id="voiceScrollWrapper">

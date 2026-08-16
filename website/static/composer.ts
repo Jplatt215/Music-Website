@@ -105,10 +105,6 @@ const complicateButton      = document.querySelector('.complicateButton')       
 const bpmSlider             = document.getElementById("bpmSlider")             as HTMLInputElement;
 const bpmValueDisplay       = document.getElementById("bpmValue")              as HTMLElement;
 const playButton            = document.querySelector('.playButton')             as HTMLButtonElement;
-const copyPartButton        = document.querySelector('.copyPartButton')         as HTMLButtonElement;
-const pastePartButton       = document.querySelector('.pastePartButton')        as HTMLButtonElement;
-const previousButton        = document.querySelector('.previousButton')         as HTMLButtonElement;
-const nextButton            = document.querySelector('.nextButton')             as HTMLButtonElement;
 
 let timeSignature: [number, number] = [4, 4];
 let measureLength: number = timeSignature[0] * (1 / timeSignature[1]);
@@ -349,6 +345,7 @@ const chordMapping: Record<string, number[]> = {
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('projectTitleBtn')?.classList.remove('active');
     btn.classList.add('active');
     document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
     const target = document.getElementById((btn as HTMLElement).dataset.target!);
@@ -502,43 +499,43 @@ document.querySelectorAll(".voiceSettings").forEach(settings => {
 
   // Event listeners read active layer's voice at fire time
   rootSelect?.addEventListener('change', () => {
-  getActiveVoices()[voiceName].scale[0] = rootSelect.value;
-  saveToLocalStorage();
-});
-scaleSelect.addEventListener('change', () => {
-  getActiveVoices()[voiceName].scale[1] = scaleSelect.value;
-  saveToLocalStorage();
-});
-minSelect.addEventListener("change", () => {
-  const voice = getActiveVoices()[voiceName];
-  populateMaxFor(minSelect.value, maxSelect, maxSelect.value);
-  voice.pitchRange[0] = minSelect.value;
-  saveToLocalStorage();
-});
-maxSelect.addEventListener("change", () => {
-  const voice = getActiveVoices()[voiceName];
-  populateMinFor(maxSelect.value, minSelect, minSelect.value);
-  voice.pitchRange[1] = maxSelect.value;
-  saveToLocalStorage();
-});
-minRhythm.addEventListener("change", () => {
-  const voice = getActiveVoices()[voiceName];
-  voice.rhythmRange[0] = parseFloat(minRhythm.value);
-  populateMaxRhythm(voice.rhythmRange[0], maxRhythm, voice.rhythmRange[1]);
-  saveToLocalStorage();
-});
-maxRhythm.addEventListener("change", () => {
-  const voice = getActiveVoices()[voiceName];
-  voice.rhythmRange[1] = parseFloat(maxRhythm.value);
-  populateMinRhythm(voice.rhythmRange[1], minRhythm, voice.rhythmRange[0]);
-  saveToLocalStorage();
-});
+    getActiveVoices()[voiceName].scale[0] = rootSelect.value;
+    saveToLocalStorage();
+  });
+  scaleSelect.addEventListener('change', () => {
+    getActiveVoices()[voiceName].scale[1] = scaleSelect.value;
+    saveToLocalStorage();
+  });
+  minSelect.addEventListener("change", () => {
+    const voice = getActiveVoices()[voiceName];
+    populateMaxFor(minSelect.value, maxSelect, maxSelect.value);
+    voice.pitchRange[0] = minSelect.value;
+    saveToLocalStorage();
+  });
+  maxSelect.addEventListener("change", () => {
+    const voice = getActiveVoices()[voiceName];
+    populateMinFor(maxSelect.value, minSelect, minSelect.value);
+    voice.pitchRange[1] = maxSelect.value;
+    saveToLocalStorage();
+  });
+  minRhythm.addEventListener("change", () => {
+    const voice = getActiveVoices()[voiceName];
+    voice.rhythmRange[0] = parseFloat(minRhythm.value);
+    populateMaxRhythm(voice.rhythmRange[0], maxRhythm, voice.rhythmRange[1]);
+    saveToLocalStorage();
+  });
+  maxRhythm.addEventListener("change", () => {
+    const voice = getActiveVoices()[voiceName];
+    voice.rhythmRange[1] = parseFloat(maxRhythm.value);
+    populateMinRhythm(voice.rhythmRange[1], minRhythm, voice.rhythmRange[0]);
+    saveToLocalStorage();
+  });
   muteButton.addEventListener("click", () => {
     muteButton.classList.toggle("active");
     getActiveVoices()[voiceName].muted = muteButton.classList.contains("active");
     saveToLocalStorage();
   });
-  harmonizeButton.addEventListener('click', () => {         // ← new, replaces old harmonizeSelect.addEventListener('change', ...)
+  harmonizeButton.addEventListener('click', () => {
     harmonizeButton.classList.toggle('active');
     mainVoices[voiceName].harmonize = harmonizeButton.classList.contains('active');
     saveToLocalStorage();
@@ -684,8 +681,10 @@ bpmSlider.addEventListener("input", () => {
 function setupPlayButton(button: HTMLButtonElement | null, getParts: () => Part[]): void {
   if (!button) return;
   button.addEventListener("click", () => {
-    button.disabled = true;
-    button.classList.add("active");
+    if (isPlaying) {
+      stopPlayback(button);
+      return;
+    }
     setupSampler().then(() => playAllParts(getParts(), button));
   });
 }
@@ -713,10 +712,60 @@ bindVoiceAction(changePitchButton,   changePitch);
 bindVoiceAction(complicateButton,    complicateVoice);
 bindVoiceAction(simplifyButton,      simplifyVoice);
 
-copyPartButton?.addEventListener("click",  () => copyPart());
-pastePartButton?.addEventListener("click", () => { pastePart(); updateMemory(); });
-previousButton?.addEventListener("click",  () => accessMemory(-1));
-nextButton?.addEventListener("click",      () => accessMemory(1));
+// Select buttons now appear in both the Create and Edit tabs — bind every instance found,
+// not just the first (a plain querySelector would silently miss the second one).
+document.querySelectorAll('.previousButton').forEach(btn => {
+  btn.addEventListener('click', () => accessMemory(-1));
+});
+document.querySelectorAll('.nextButton').forEach(btn => {
+  btn.addEventListener('click', () => accessMemory(1));
+});
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Keyboard shortcuts: Space = Play, Ctrl+C / Ctrl+V = Copy/Paste
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+document.addEventListener('keydown', (e: KeyboardEvent) => {
+  const target = e.target as HTMLElement;
+  const isTextEntry =
+    (target.tagName === 'INPUT' && (target as HTMLInputElement).type !== 'range') ||
+    target.tagName === 'SELECT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.isContentEditable;
+
+
+  if (isTextEntry) return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    playButton?.click();
+    return;
+  }
+
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'z' || e.key === 'Z') {
+      e.preventDefault();
+      accessMemory(-1);
+      return;
+    }
+    if (e.key === 'y' || e.key === 'Y') {
+      e.preventDefault();
+      accessMemory(1);
+      return;
+    }
+    if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      copyPart();
+      return;
+    }
+    if (e.key === 'v' || e.key === 'V') {
+      e.preventDefault();
+      pastePart();
+      updateMemory();
+      return;
+    }
+  }
+});
 
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -2310,38 +2359,60 @@ function complicateVoice(voice: Part): void {
 // Audio
 /////////////////////////////////////////////////////////////////////////////////////
 
+let isPlaying = false;
+let stopTimeoutId: number | null = null;
+
 async function playAllParts(parts: Part[], button: HTMLButtonElement): Promise<void> {
   await Tone.start();
-  const now = Tone.now();
+
+  Tone.Transport.stop();
+  Tone.Transport.cancel();
+  Tone.Transport.position = 0;
+
   let longestDuration = 0;
   const bpm = parseFloat(bpmSlider.value) || 120;
   const secondsPerBeat = 60 / bpm;
 
   parts.forEach(part => {
     if (part.muted) return;
-    let currentTime = now;
+    let currentTime = 0;
 
     part.toneNotes.forEach(([pitch, duration]) => {
-      if (pitch == null) {
-        currentTime += duration * secondsPerBeat * 4;
-        return;
+      const noteDurSeconds = duration * secondsPerBeat * 4;
+      if (pitch != null) {
+        const scheduledTime = currentTime;
+        Tone.Transport.schedule((time: number) => {
+          for (const p of pitch) {
+            sampler!.triggerAttackRelease(p, noteDurSeconds, time);
+          }
+        }, scheduledTime);
       }
-      for (const p of pitch) {
-        sampler!.triggerAttackRelease(p, duration * secondsPerBeat * 4, currentTime);
-      }
-      currentTime += duration * secondsPerBeat * 4;
+      currentTime += noteDurSeconds;
     });
 
-    const partDuration = currentTime - now;
-    if (partDuration > longestDuration) longestDuration = partDuration;
+    if (currentTime > longestDuration) longestDuration = currentTime;
   });
 
-  button.disabled = true;
+  isPlaying = true;
   button.classList.add("active");
-  setTimeout(() => {
-    button.disabled = false;
-    button.classList.remove("active");
+
+  Tone.Transport.start();
+
+  stopTimeoutId = window.setTimeout(() => {
+    stopPlayback(button);
   }, longestDuration * 1000);
+}
+
+function stopPlayback(button: HTMLButtonElement | null): void {
+  Tone.Transport.stop();
+  Tone.Transport.cancel();
+  if (sampler) sampler.releaseAll();
+  if (stopTimeoutId !== null) {
+    clearTimeout(stopTimeoutId);
+    stopTimeoutId = null;
+  }
+  isPlaying = false;
+  if (button) button.classList.remove("active");
 }
 
 function staveNoteToToneJSNote(staveNote: any): string[] | null {

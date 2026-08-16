@@ -51,10 +51,6 @@ const complicateButton = document.querySelector('.complicateButton');
 const bpmSlider = document.getElementById("bpmSlider");
 const bpmValueDisplay = document.getElementById("bpmValue");
 const playButton = document.querySelector('.playButton');
-const copyPartButton = document.querySelector('.copyPartButton');
-const pastePartButton = document.querySelector('.pastePartButton');
-const previousButton = document.querySelector('.previousButton');
-const nextButton = document.querySelector('.nextButton');
 let timeSignature = [4, 4];
 let measureLength = timeSignature[0] * (1 / timeSignature[1]);
 let numMeasures = 1;
@@ -237,6 +233,7 @@ const chordMapping = {
 document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById('projectTitleBtn')?.classList.remove('active');
         btn.classList.add('active');
         document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
         const target = document.getElementById(btn.dataset.target);
@@ -546,8 +543,10 @@ function setupPlayButton(button, getParts) {
     if (!button)
         return;
     button.addEventListener("click", () => {
-        button.disabled = true;
-        button.classList.add("active");
+        if (isPlaying) {
+            stopPlayback(button);
+            return;
+        }
         setupSampler().then(() => playAllParts(getParts(), button));
     });
 }
@@ -571,10 +570,54 @@ bindVoiceAction(shufflePitchButton, shufflePitch);
 bindVoiceAction(changePitchButton, changePitch);
 bindVoiceAction(complicateButton, complicateVoice);
 bindVoiceAction(simplifyButton, simplifyVoice);
-copyPartButton?.addEventListener("click", () => copyPart());
-pastePartButton?.addEventListener("click", () => { pastePart(); updateMemory(); });
-previousButton?.addEventListener("click", () => accessMemory(-1));
-nextButton?.addEventListener("click", () => accessMemory(1));
+// Select buttons now appear in both the Create and Edit tabs — bind every instance found,
+// not just the first (a plain querySelector would silently miss the second one).
+document.querySelectorAll('.previousButton').forEach(btn => {
+    btn.addEventListener('click', () => accessMemory(-1));
+});
+document.querySelectorAll('.nextButton').forEach(btn => {
+    btn.addEventListener('click', () => accessMemory(1));
+});
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Keyboard shortcuts: Space = Play, Ctrl+C / Ctrl+V = Copy/Paste
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+document.addEventListener('keydown', (e) => {
+    const target = e.target;
+    const isTextEntry = (target.tagName === 'INPUT' && target.type !== 'range') ||
+        target.tagName === 'SELECT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable;
+    if (isTextEntry)
+        return;
+    if (e.code === 'Space') {
+        e.preventDefault();
+        playButton?.click();
+        return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'z' || e.key === 'Z') {
+            e.preventDefault();
+            accessMemory(-1);
+            return;
+        }
+        if (e.key === 'y' || e.key === 'Y') {
+            e.preventDefault();
+            accessMemory(1);
+            return;
+        }
+        if (e.key === 'c' || e.key === 'C') {
+            e.preventDefault();
+            copyPart();
+            return;
+        }
+        if (e.key === 'v' || e.key === 'V') {
+            e.preventDefault();
+            pastePart();
+            updateMemory();
+            return;
+        }
+    }
+});
 /////////////////////////////////////////////////////////////////////////////////////
 // Main Functions
 /////////////////////////////////////////////////////////////////////////////////////
@@ -2005,36 +2048,54 @@ function complicateVoice(voice) {
 /////////////////////////////////////////////////////////////////////////////////////
 // Audio
 /////////////////////////////////////////////////////////////////////////////////////
+let isPlaying = false;
+let stopTimeoutId = null;
 async function playAllParts(parts, button) {
     await Tone.start();
-    const now = Tone.now();
+    Tone.Transport.stop();
+    Tone.Transport.cancel();
+    Tone.Transport.position = 0;
     let longestDuration = 0;
     const bpm = parseFloat(bpmSlider.value) || 120;
     const secondsPerBeat = 60 / bpm;
     parts.forEach(part => {
         if (part.muted)
             return;
-        let currentTime = now;
+        let currentTime = 0;
         part.toneNotes.forEach(([pitch, duration]) => {
-            if (pitch == null) {
-                currentTime += duration * secondsPerBeat * 4;
-                return;
+            const noteDurSeconds = duration * secondsPerBeat * 4;
+            if (pitch != null) {
+                const scheduledTime = currentTime;
+                Tone.Transport.schedule((time) => {
+                    for (const p of pitch) {
+                        sampler.triggerAttackRelease(p, noteDurSeconds, time);
+                    }
+                }, scheduledTime);
             }
-            for (const p of pitch) {
-                sampler.triggerAttackRelease(p, duration * secondsPerBeat * 4, currentTime);
-            }
-            currentTime += duration * secondsPerBeat * 4;
+            currentTime += noteDurSeconds;
         });
-        const partDuration = currentTime - now;
-        if (partDuration > longestDuration)
-            longestDuration = partDuration;
+        if (currentTime > longestDuration)
+            longestDuration = currentTime;
     });
-    button.disabled = true;
+    isPlaying = true;
     button.classList.add("active");
-    setTimeout(() => {
-        button.disabled = false;
-        button.classList.remove("active");
+    Tone.Transport.start();
+    stopTimeoutId = window.setTimeout(() => {
+        stopPlayback(button);
     }, longestDuration * 1000);
+}
+function stopPlayback(button) {
+    Tone.Transport.stop();
+    Tone.Transport.cancel();
+    if (sampler)
+        sampler.releaseAll();
+    if (stopTimeoutId !== null) {
+        clearTimeout(stopTimeoutId);
+        stopTimeoutId = null;
+    }
+    isPlaying = false;
+    if (button)
+        button.classList.remove("active");
 }
 function staveNoteToToneJSNote(staveNote) {
     if (staveNote.isRest())

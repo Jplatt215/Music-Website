@@ -1,4 +1,3 @@
-/// <reference path="declarations.d.ts" />
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Auth State
@@ -42,9 +41,9 @@ async function fetchJSON(url: string, options: RequestInit = {}): Promise<any> {
 
 document.querySelectorAll('.auth-tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.auth-tab').forEach(tab => tab.classList.remove('active'));
     tab.classList.add('active');
-    document.querySelectorAll('.auth-form').forEach(f => f.classList.add('hidden'));
+    document.querySelectorAll('.auth-form').forEach(form => form.classList.add('hidden'));
     const targetId = (tab as HTMLElement).dataset.tabTarget!;
     const target = document.getElementById(targetId);
     target?.classList.remove('hidden');
@@ -60,8 +59,8 @@ authModalClose.addEventListener('click', () => {
   clearAuthForms();
 });
 
-authModal.addEventListener('click', (e) => {
-  if (e.target === authModal) {
+authModal.addEventListener('click', (event) => {
+  if (event.target === authModal) {
     authModal.classList.add('hidden');
     clearAuthForms();
   }
@@ -81,13 +80,13 @@ function clearAuthForms(): void {
 // User Dropdown
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-userMenuBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
+userMenuBtn.addEventListener('click', (event) => {
+  event.stopPropagation();
   userDropdown.classList.toggle('hidden');
 });
 
-document.addEventListener('click', (e) => {
-  if (!navUser.contains(e.target as Node)) {
+document.addEventListener('click', (event) => {
+  if (!navUser.contains(event.target as Node)) {
     userDropdown.classList.add('hidden');
   }
 });
@@ -126,8 +125,8 @@ loginSubmit.addEventListener('click', async () => {
       loginError.textContent = data.message || 'Login failed. Please try again.';
       loginError.classList.remove('hidden');
     }
-  } catch (e: any) {
-    loginError.textContent = e.message || 'Network error. Please check your connection.';
+  } catch (error: any) {
+    loginError.textContent = error.message || 'Network error. Please check your connection.';
     loginError.classList.remove('hidden');
   } finally {
     loginSubmit.disabled = false;
@@ -170,8 +169,8 @@ registerSubmit.addEventListener('click', async () => {
       registerError.textContent = data.message || 'Registration failed. Please try again.';
       registerError.classList.remove('hidden');
     }
-  } catch (e: any) {
-    registerError.textContent = e.message || 'Network error. Please check your connection.';
+  } catch (error: any) {
+    registerError.textContent = error.message || 'Network error. Please check your connection.';
     registerError.classList.remove('hidden');
   } finally {
     registerSubmit.disabled = false;
@@ -186,8 +185,8 @@ registerSubmit.addEventListener('click', async () => {
 logoutBtn.addEventListener('click', async () => {
   try {
     await fetch('/api/logout', { method: 'POST' });
-  } catch (e) {
-    console.warn('Logout request failed:', e);
+  } catch (error) {
+    console.warn('Logout request failed:', error);
   }
 
   isLoggedIn = false;
@@ -235,8 +234,8 @@ async function checkAuth(): Promise<void> {
   try {
     const data = await fetchJSON('/api/me');
     if (data.loggedIn) onLogin(data.username);
-  } catch (e) {
-    console.warn('Auth check failed:', e);
+  } catch (error) {
+    console.warn('Auth check failed:', error);
   }
 }
 

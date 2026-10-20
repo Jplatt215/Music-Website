@@ -1,4 +1,3 @@
-/// <reference path="declarations.d.ts" />
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Save/Load State
@@ -19,19 +18,24 @@ const projectTitleBtn = document.getElementById('projectTitleBtn') as HTMLButton
 const createTabBtn = document.getElementById('createTabBtn') as HTMLButtonElement;
 const editTabBtn   = document.getElementById('editTabBtn')   as HTMLButtonElement;
 const loadTabBtn   = document.getElementById('loadTabBtn')   as HTMLButtonElement;
+const exportTabBtn = document.getElementById('exportTabBtn') as HTMLButtonElement;
 let previousTabId: string = 'input-menu';
 
 projectTitleBtn?.addEventListener('click', () => {
   const loadMenu = document.getElementById('load-menu') as HTMLElement;
-  const isLoadOpen = !loadMenu.classList.contains('hidden');
+  const exportMenu = document.getElementById('export-menu') as HTMLElement;
+  const isLoadAreaOpen = !loadTabBtn.classList.contains('hidden');
 
-  if (isLoadOpen) {
+  if (isLoadAreaOpen) {
     // Switch back to Create/Edit
     loadTabBtn.classList.add('hidden');
+    exportTabBtn.classList.add('hidden');
     loadTabBtn.classList.remove('active');
+    exportTabBtn.classList.remove('active');
     createTabBtn.classList.remove('hidden');
     editTabBtn.classList.remove('hidden');
     loadMenu.classList.add('hidden');
+    exportMenu.classList.add('hidden');
     projectTitleBtn.classList.remove('active');
 
     const prevBtn = document.querySelector(`.tab-btn[data-target="${previousTabId}"]`) as HTMLButtonElement;
@@ -39,16 +43,17 @@ projectTitleBtn?.addEventListener('click', () => {
     document.getElementById(previousTabId)?.classList.remove('hidden');
 
   } else {
-    // Remember which tab was active, then switch to Load
+    // Remember which tab was active, then switch to Load/Export
     const activeBtn = document.querySelector('.tab-btn.active') as HTMLButtonElement;
     previousTabId = activeBtn?.dataset.target ?? 'input-menu';
 
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(button => button.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
 
     createTabBtn.classList.add('hidden');
     editTabBtn.classList.add('hidden');
     loadTabBtn.classList.remove('hidden');
+    exportTabBtn.classList.remove('hidden');
     loadTabBtn.classList.add('active');
 
     loadMenu.classList.remove('hidden');
@@ -56,6 +61,12 @@ projectTitleBtn?.addEventListener('click', () => {
     loadCompositionList();
   }
 });
+
+const exportMidiButton     = document.querySelector('.exportMidiButton')     as HTMLButtonElement;
+const exportMusicXMLButton = document.querySelector('.exportMusicXMLButton') as HTMLButtonElement;
+
+exportMidiButton?.addEventListener('click', () => exportLayerToMidi());
+exportMusicXMLButton?.addEventListener('click', () => exportLayerToMusicXML());
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helpers
@@ -78,74 +89,106 @@ function showSaveError(message: string): void {
 // Serialize / Deserialize
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-function serializeVoice(voice: Part): object {
+// Saves made before the staff rename used the keys upperVoice ... voice4
+function migrateLegacyStaffKeys(data: any): any {
+  const legacy: Record<string, string> = { upperVoice: 'staff1', middleVoice: 'staff2', lowerVoice: 'staff3', voice4: 'staff4' };
+  const rename = (obj: any) => {
+    if (!obj) return obj;
+    const out: any = {};
+    for (const key of Object.keys(obj)) out[legacy[key] ?? key] = obj[key];
+    return out;
+  };
+  return { ...data, main: rename(data.main), harmony: rename(data.harmony) };
+}
+
+function serializeNotes(notes: UnprocessedNote[]): object[] {
+  return notes.map(note => ({
+    noteName: note.noteName,
+    octave: note.octave,
+    octaves: note.octaves,
+    duration: note.duration,
+    dotted: note.dotted,
+    tupletInfo: note.tupletInfo,
+    tiedToNext: note.tiedToNext,
+  }));
+}
+
+function savedNotesToUnprocessed(saved: any[]): UnprocessedNote[] {
+  return (saved ?? []).map((savedNote: any) => {
+    const note = new UnprocessedNote(savedNote.noteName, savedNote.octaves ?? savedNote.octave, savedNote.duration, savedNote.dotted, savedNote.tiedToNext ?? false);
+    if (savedNote.tupletInfo) note.tupletInfo = { ...savedNote.tupletInfo };
+    return note;
+  });
+}
+
+// "notes" is Up 1, so older versions of the app still open new saves; the other voices are in "extraVoices"
+function serializeStaff(staff: Staff): object {
   return {
-    pitchRange: voice.pitchRange,
-    rhythmRange: voice.rhythmRange,
-    scale: voice.scale,
-    harmonize: voice.harmonize,
-    muted: voice.muted,
-    notes: voice.unprocessedNotes.map(note => ({
-      noteName: note.noteName,
-      octave: note.octave,
-      duration: note.duration,
-      dotted: note.dotted,
-      tupletInfo: note.tupletInfo,
-      tiedToNext: note.tiedToNext,
-    })),
+    pitchRange: staff.pitchRange,
+    rhythmRange: staff.rhythmRange,
+    scale: staff.scale,
+    harmonize: staff.harmonize,
+    muted: staff.muted,
+    notes: serializeNotes(staff.unprocessedNotes),
+    extraVoices: staff.extraVoices.map(voice => ({ id: voice.id, notes: serializeNotes(voice.unprocessedNotes) })),
   };
 }
 
-function restoreVoice(voice: Part, saved: any): void {
+function restoreStaff(staff: Staff, saved: any): void {
   if (!saved) return;
 
-  voice.pitchRange  = saved.pitchRange;
-  voice.rhythmRange = saved.rhythmRange;
-  voice.scale       = saved.scale;
-  voice.harmonize   = saved.harmonize ?? voice.harmonize;
-  voice.muted       = saved.muted ?? false;
+  staff.pitchRange  = saved.pitchRange;
+  staff.rhythmRange = saved.rhythmRange;
+  staff.scale       = saved.scale;
+  staff.harmonize   = saved.harmonize ?? staff.harmonize;
+  staff.muted       = saved.muted ?? false;
 
-  resetPart(voice);
+  staff.extraVoices = [];
+  resetStaff(staff);
+  processNotes(staff, savedNotesToUnprocessed(saved.notes));
 
-  const notes = saved.notes.map((n: any) => {
-    const note = new UnprocessedNote(n.noteName, n.octave, n.duration, n.dotted, n.tiedToNext ?? false);
-    if (n.tupletInfo) note.tupletInfo = { ...n.tupletInfo };
-    return note;
-  });
-
-  processNotes(voice, notes);
+  for (const extra of saved.extraVoices ?? []) {
+    if (extra.id === 'up1' || !VOICE_DEFS.some(voiceDef => voiceDef.id === extra.id)) continue;
+    const voice = getOrCreateVoice(staff, extra.id);
+    resetVoice(voice);
+    processNotes(voice, savedNotesToUnprocessed(extra.notes));
+  }
 }
 
 function getCompositionData(): object {
   const mainData: Record<string, object> = {};
   const harmonyData: Record<string, object> = {};
 
-  for (const voiceName of voices) {
-    mainData[voiceName]    = serializeVoice(mainVoices[voiceName]);
-    harmonyData[voiceName] = serializeVoice(harmonyVoices[voiceName]);
+  for (const staffName of staves) {
+    mainData[staffName]    = serializeStaff(mainStaves[staffName]);
+    harmonyData[staffName] = serializeStaff(harmonyStaves[staffName]);
   }
 
-  return { timeSignature, numMeasures, main: mainData, harmony: harmonyData };
+  return { timeSignature: [measureSigs[0].num, measureSigs[0].den], measureSigs: sigsForSave(), numMeasures, main: mainData, harmony: harmonyData };
 }
 
 function loadCompositionData(data: any): void {
-  timeSignature = data.timeSignature;
+    data = migrateLegacyStaffKeys(data);
   numMeasures   = data.numMeasures;
-  measureLength = timeSignature[0] / timeSignature[1];
+  measureSigs   = sigsFromData(data);
 
-  for (const voiceName of voices) {
-    restoreVoice(mainVoices[voiceName], data.main[voiceName]);
-    restoreVoice(harmonyVoices[voiceName], data.harmony[voiceName]);
+  for (const staffName of staves) {
+    restoreStaff(mainStaves[staffName], data.main[staffName]);
+    restoreStaff(harmonyStaves[staffName], data.harmony[staffName]);
   }
 
   // Sync the settings panel UI (scale, pitch/rhythm range, harmonize toggle, mute)
   // to match whichever layer's voices were just restored.
-  document.querySelectorAll(".voiceSettings").forEach(settings => {
-    const voiceName = (settings as HTMLElement).dataset.voice!;
-    populateVoiceSettings(settings, voiceName);
+  document.querySelectorAll(".staffSettings").forEach(settings => {
+    const staffName = (settings as HTMLElement).dataset.staff!;
+    populateStaffSettings(settings, staffName);
   });
 
-  drawAllVoices();
+  for (const layer of ['main', 'harmony'] as const) {
+    selections[layer] = {};
+    lastSelectedStaff[layer] = null;
+  }
+  drawAllStaves();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -182,15 +225,15 @@ async function loadCompositionList(): Promise<void> {
       row.addEventListener('click', () => {
         saveToLocalStorage();
         loadComposition(comp.slug, comp.title);
-        compositionList.querySelectorAll('div').forEach(r => {
-          (r as HTMLElement).style.backgroundColor = '';
+        compositionList.querySelectorAll('div').forEach(row => {
+          (row as HTMLElement).style.backgroundColor = '';
         });
         row.style.backgroundColor = '#d3d3d3';
       });
 
       compositionList.appendChild(row);
     }
-  } catch (e) {
+  } catch (error) {
     compositionList.innerHTML = '<p style="padding: 8px; font-size: 12px; color: red;">Network error. Could not load compositions.</p>';
   }
 }
@@ -227,7 +270,7 @@ async function loadComposition(slug: string, title: string): Promise<void> {
     currentCompositionTitle.textContent = currentTitle;
     history.pushState({}, '', `/compositions/${slug}`);
     saveToLocalStorage();
-  } catch (e) {
+  } catch (error) {
     showSaveError('Network error. Could not load composition.');
   }
 }
@@ -259,7 +302,7 @@ deleteCompositionButton?.addEventListener('click', async () => {
     localStorage.removeItem('composerCurrentSlug');
     localStorage.removeItem('composerCurrentTitle');
     loadCompositionList();
-  } catch (e) {
+  } catch (error) {
     showSaveError('Network error. Could not delete composition.');
   }
 });
@@ -288,7 +331,7 @@ saveButton?.addEventListener('click', async () => {
           showSaveError('Failed to save. Please try again.');
           return;
         }
-      } catch (e) {
+      } catch (error) {
         showSaveError('Network error. Could not save composition.');
         return;
       }
@@ -310,7 +353,7 @@ async function saveAsNew(): Promise<void> {
   try {
     const listRes = await fetch('/api/compositions');
     const existing = listRes.ok ? await listRes.json() : [];
-    const existingTitles: string[] = existing.map((c: any) => c.title);
+    const existingTitles: string[] = existing.map((cell: any) => cell.title);
 
     const baseName = currentTitle || 'Project';
     let newTitle = baseName;
@@ -347,7 +390,7 @@ async function saveAsNew(): Promise<void> {
     } else {
       showSaveError(data.message || 'Failed to save composition.');
     }
-  } catch (e) {
+  } catch (error) {
     showSaveError('Network error. Could not save composition.');
   }
 }
@@ -360,26 +403,35 @@ newCompositionButton?.addEventListener('click', () => {
   if (!confirm('Start a new composition? Unsaved changes will be lost.')) return;
 
   numMeasures = 1;
-  timeSignature = [4, 4];
-  measureLength = timeSignature[0] / timeSignature[1];
+  measureSigs = [makeSig(4, 4)];
 
-  for (const voiceName of voices) {
-    resetVoiceToDefaults(mainVoices[voiceName], [0.03125, 1]);
-    resetVoiceToDefaults(harmonyVoices[voiceName], [0.25, 1]);
+  for (const staffName of staves) {
+    resetStaffToDefaults(mainStaves[staffName], [0.03125, 1]);
+    resetStaffToDefaults(harmonyStaves[staffName], [0.25, 1]);
   }
 
-  for (const voiceName of voices) {
-    const voice = mainVoices[voiceName];
-    const restNotes = fillDurationWithRests(numMeasures * measureLength);
-    processNotes(voice, restNotes);
+  for (const staffName of staves) {
+    processNotes(mainStaves[staffName], fillDurationWithRests(totalLength()));
+    processNotes(harmonyStaves[staffName], fillDurationWithRests(totalLength()));
   }
 
-  document.querySelectorAll(".voiceSettings").forEach(settings => {
-    const voiceName = (settings as HTMLElement).dataset.voice!;
-    populateVoiceSettings(settings, voiceName);
+  // Selection reset (replaces the old per-tab block)
+  for (const layer of ['main', 'harmony'] as const) {
+    selections[layer] = {};
+    lastSelectedStaff[layer] = null;
+  }
+  const fullLength = totalLength();
+  selections.main['staff1'] = { start: 0, end: fullLength };
+  selections.harmony['staff1'] = { start: 0, end: fullLength };
+  lastSelectedStaff.main = 'staff1';
+  lastSelectedStaff.harmony = 'staff1';
+
+  document.querySelectorAll(".staffSettings").forEach(settings => {
+    const staffName = (settings as HTMLElement).dataset.staff!;
+    populateStaffSettings(settings, staffName);
   });
 
-  drawAllVoices();
+  drawAllStaves();
 
   currentSlug  = null;
   currentTitle = null;
@@ -397,8 +449,8 @@ function saveToLocalStorage(): void {
     localStorage.setItem('composerAutosave', JSON.stringify(getCompositionData()));
     if (currentSlug)  localStorage.setItem('composerCurrentSlug',  currentSlug);
     if (currentTitle) localStorage.setItem('composerCurrentTitle', currentTitle);
-  } catch (e) {
-    console.warn('Failed to autosave:', e);
+  } catch (error) {
+    console.warn('Failed to autosave:', error);
   }
 }
 
@@ -415,8 +467,8 @@ function loadFromLocalStorage(): void {
       currentTitle = title;
       currentCompositionTitle.textContent = title;
     }
-  } catch (e) {
-    console.warn('Failed to load autosave:', e);
+  } catch (error) {
+    console.warn('Failed to load autosave:', error);
     localStorage.removeItem('composerAutosave');
     localStorage.removeItem('composerCurrentSlug');
     localStorage.removeItem('composerCurrentTitle');

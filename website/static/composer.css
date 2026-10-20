@@ -215,6 +215,9 @@ body {
   display: flex;
   align-items: center;
 }
+.topBarLeft:hover {
+  background: #ccc;
+}
 
 .topBarRight {
   flex: 1 1 auto;
@@ -242,8 +245,9 @@ body {
 }
 
 .projectTitle {
-  font-size: 18px;
-  font-weight: bold;
+  padding-left: 5px;
+  font-size: 20px;
+  font-style: italic;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -287,7 +291,7 @@ body {
   overflow-x: hidden;
 }
 
-#voiceScrollWrapper {
+#staffScrollWrapper {
   overflow-x: auto;
   overflow-y: visible;
   flex: 1 1 auto;
@@ -301,7 +305,7 @@ body {
     width: max-content;
   }
 
-.voiceContainer {
+.staffContainer {
   position: relative;
   overflow: visible;
   height: 300px;
@@ -350,7 +354,7 @@ button.active {
 }
 
 
-.voiceContainer.active{
+.staffContainer.active{
   background-color: hsl(0, 3%, 94%) !important;
 }
 
@@ -387,6 +391,17 @@ button.active {
     background-color: hsl(0, 0%, 86%);
 }
 
+.modeControls { display: flex; margin-left: 100px; }
+
+.modeButton {
+  font-size: 18px;
+  height: 24px;
+  width: 36px;
+  line-height: 16px;
+  background-color: hsl(0, 0%, 86%);
+}
+.modeButton.active { background-color: #a8a8a8; }
+
 .playButton{
     font-size: 18px;  
     height: 24px;
@@ -394,42 +409,78 @@ button.active {
     line-height: 16px;
     background-color: hsl(0, 0%, 86%);
 }
+.showGridButton{
+  margin-left: 950px;
+  background-color: hsl(0, 0%, 86%);
+  display: none;
+}
 
-.voiceContainer svg {
+.insertButton{
+  background-color: hsl(0, 0%, 86%);
+  display: none;
+}
+
+.settingsButton{
+  background-color: hsl(0, 0%, 86%);
+  display: none;
+}
+
+.staffContainer svg {
   display: block;
 }
 
-#upperVoiceContainer, #middleVoiceContainer, #lowerVoiceContainer, #voice4Container {
+#staff1Container, #staff2Container, #staff3Container, #staff4Container {
   height: 300px;
   overflow: visible;
   padding-left: 30px;
   background-color: white;
 }
 
-#harmonyVoiceContainer {
-  flex: 0 0 auto; 
-  width: 100% !important;   
-  min-width: 100% !important;
-  max-width: 100%;
-  height: 300px;
-  padding-left: 30px;
-  background-color: white;
-  box-sizing: border-box;
+.rightControls { display: flex; align-items: center; gap: 20px; }
+#gridSliderValue { min-width: 28px; }
+
+#gridSlider {
+  width: 100px;
+  height: 6px;
+  background: #575757;
+  appearance: none;
+  outline: none;
+}
+#gridSlider::-webkit-slider-runnable-track { background: #575757; height: 6px; border-radius: 1px; }
+#gridSlider::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  background: #575757;
+  border-radius: 0;
+  cursor: pointer;
+  margin-top: -3.5px;
 }
 
+.gridControl,
+#bpmDisplay {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
 
 #bpmDisplay {
-  display: inline-block;
-  min-width: 30px; 
+  min-width: 30px;
   background-color: hsl(0, 0%, 86%);
   border-width: 0px;
 }
+
 #bpmSlider {
   width: 170px;
   height: 6px;
-  margin-left: 15px;
+  margin: 0;              /* was margin-left: 15px, the gap handles it now */
   background: #575757;
-  appearance: none; 
+  appearance: none;
   outline: none;
 }
 
@@ -449,13 +500,13 @@ button.active {
   margin-top: -3.5px; 
 }
 
-.voiceWrapper {
+.staffWrapper {
     display: flex;
     align-items: flex-start;
     width: max-content;
   }
 
-.voiceSettings {
+.staffSettings {
   position: sticky;
   left: 0;
   z-index: 10;
@@ -473,9 +524,14 @@ button.active {
   box-sizing: border-box;
 }
 
-.voiceSettings button {
+.staffSettings button {
   font-size: 12px;
   padding: 4px 6px;
+  cursor: pointer;
+}
+
+.staffSettingsBlank {
+  flex: 1 1 auto;
   cursor: pointer;
 }
 
@@ -490,7 +546,7 @@ button.active {
 }
 
 
-.output-container, .voiceSettings, .row {
+.output-container, .staffSettings, .row {
     overflow: visible !important;
 }
 
@@ -549,11 +605,6 @@ button.active {
   box-sizing: border-box;
 }
 
-#loadTabBtn.active {
-  background: #575757;
-  color: antiquewhite;
-}
-
 
 .input-menu,
 .settings-menu {
@@ -599,6 +650,8 @@ button.active {
   flex: 1 1 auto;
   min-width: 0;
 }
+
+.measure-bar-cell.play-start { box-shadow: inset 4px 0 0 #575757; }
 
 #layerTabs {
   flex: 0 0 160px;
@@ -736,3 +789,83 @@ button.active {
 button:focus {
   outline: none;
 }
+
+
+.gridOverlay { display: none; }
+body.gridView .gridOverlay { display: block; }
+
+body:not(.gridView) .staffSettingsBlank { pointer-events: none; cursor: default; }
+
+.gridLine { stroke-width: 1; shape-rendering: crispEdges; }
+.gridLine-bar    { stroke: #888; }
+.gridLine-onset  { stroke: #baa593; }
+.gridLine-sub    { stroke: #d0d0d0; }
+.gridLine-tuplet { stroke: #d0d0d0; stroke-dasharray: 3 3; }
+.gridLabel { font-size: 12px; fill: #555; }
+
+.selectionHighlight {
+  fill: #baa593;
+  fill-opacity: 0.18;
+  stroke: #baa593;
+  stroke-width: 0;
+}
+
+.selectionHandle {
+  fill: #baa593;
+  stroke: #baa593;      /* darker than the fill so the outline shows */
+  stroke-width: .5;
+  vector-effect: non-scaling-stroke;
+}
+
+#pitchRow { flex-wrap: wrap; }
+#pitchRow > .pitchBtn { flex: 0 0 auto; min-width: 46px; height: 30px; padding: 0 6px; font-size: 14px; background-color: hsl(0, 0%, 86%); }
+#pitchRow > .pitchBtn.active { background-color: #a8a8a8; }
+#pitchRow > .pitchBtn.bad { background-color: #e8a0a0; }
+#pitchRow > .pitchBtn.bad.active { background-color: #d46a6a; }
+#pitchRow > .pitchBtn.pending { border: 1px dashed #575757; font-style: italic; }
+#pitchRow > .pitchAdd { min-width: 34px; }
+
+.row .editBtn[data-kind="dot"] {
+  font-size: 36px;
+  line-height: .5;
+  height: 26px;
+}
+
+/* Create-tab buttons */
+#input-menu button {
+  font-size: 17px;      /* default is about 13px */
+}
+
+/* The section labels (Accompany, Mirror, Shift...) */
+#input-menu .buttonDescription {
+  font-size: 17px;
+}
+/* Row height of the Create-tab buttons */
+#input-menu button {
+  height: 36px;         /* default is about 22px; try 28 to 40 */
+}
+
+.noteOutline { fill: none; stroke: #575757; stroke-width: 1.5; }
+.row .voiceBtn { height: 30px; font-size: 14px; padding: 0 6px; background-color: hsl(0, 0%, 86%); }
+.row .voiceBtn.active { background-color: #a8a8a8; }
+.row .voiceBtn:disabled { opacity: 0.3; cursor: default; }
+
+
+.noteOutline { fill: none; stroke: #575757; stroke-width: 1.5; }
+.row .voiceBtn { height: 30px; font-size: 14px; padding: 0 6px; background-color: hsl(0, 0%, 86%); }
+.row .voiceBtn.active { background-color: #a8a8a8; }
+.row .voiceBtn:disabled { opacity: 0.3; cursor: default; }
+
+
+#entryDisplay {
+  font-size: 16px;
+  color: #2e86de;
+  border: 1px solid #2e86de;
+  padding: 6px 8px;
+}
+#entryDisplay .entryVoice { font-size: 1.2em; font-weight: 525; }
+#entryDisplay[hidden] { display: none; }
+.entryCaret { stroke: #2e86de; stroke-width: 2; }
+
+.entryCaretNote { fill: #2e86de; font-size: 40px; }
+.entryCaretDot  { fill: #2e86de; transform: translateX(8px); }

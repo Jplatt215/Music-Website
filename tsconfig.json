@@ -9,9 +9,17 @@
     "outDir": "./website/static/js"
   },
   "files": [
-    "website/static/composer.ts",
+    "website/static/types-state.ts",
+    "website/static/notes.ts",
+    "website/static/notation.ts",
+    "website/static/grid.ts",
+    "website/static/create.ts",
+    "website/static/edit.ts",
+    "website/static/write.ts",
+    "website/static/audio.ts",
+    "website/static/export.ts",
+    "website/static/app.ts",
     "website/static/auth.ts",
-    "website/static/saveload.ts",
-    "website/static/declarations.d.ts"
+    "website/static/saveload.ts"
   ]
 }

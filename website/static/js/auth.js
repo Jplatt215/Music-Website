@@ -1,5 +1,4 @@
 "use strict";
-/// <reference path="declarations.d.ts" />
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Auth State
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -35,9 +34,9 @@ async function fetchJSON(url, options = {}) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 document.querySelectorAll('.auth-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-        document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.auth-tab').forEach(tab => tab.classList.remove('active'));
         tab.classList.add('active');
-        document.querySelectorAll('.auth-form').forEach(f => f.classList.add('hidden'));
+        document.querySelectorAll('.auth-form').forEach(form => form.classList.add('hidden'));
         const targetId = tab.dataset.tabTarget;
         const target = document.getElementById(targetId);
         target?.classList.remove('hidden');
@@ -50,8 +49,8 @@ authModalClose.addEventListener('click', () => {
     authModal.classList.add('hidden');
     clearAuthForms();
 });
-authModal.addEventListener('click', (e) => {
-    if (e.target === authModal) {
+authModal.addEventListener('click', (event) => {
+    if (event.target === authModal) {
         authModal.classList.add('hidden');
         clearAuthForms();
     }
@@ -68,12 +67,12 @@ function clearAuthForms() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // User Dropdown
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-userMenuBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
+userMenuBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
     userDropdown.classList.toggle('hidden');
 });
-document.addEventListener('click', (e) => {
-    if (!navUser.contains(e.target)) {
+document.addEventListener('click', (event) => {
+    if (!navUser.contains(event.target)) {
         userDropdown.classList.add('hidden');
     }
 });
@@ -107,8 +106,8 @@ loginSubmit.addEventListener('click', async () => {
             loginError.classList.remove('hidden');
         }
     }
-    catch (e) {
-        loginError.textContent = e.message || 'Network error. Please check your connection.';
+    catch (error) {
+        loginError.textContent = error.message || 'Network error. Please check your connection.';
         loginError.classList.remove('hidden');
     }
     finally {
@@ -147,8 +146,8 @@ registerSubmit.addEventListener('click', async () => {
             registerError.classList.remove('hidden');
         }
     }
-    catch (e) {
-        registerError.textContent = e.message || 'Network error. Please check your connection.';
+    catch (error) {
+        registerError.textContent = error.message || 'Network error. Please check your connection.';
         registerError.classList.remove('hidden');
     }
     finally {
@@ -163,8 +162,8 @@ logoutBtn.addEventListener('click', async () => {
     try {
         await fetch('/api/logout', { method: 'POST' });
     }
-    catch (e) {
-        console.warn('Logout request failed:', e);
+    catch (error) {
+        console.warn('Logout request failed:', error);
     }
     isLoggedIn = false;
     currentSlug = null;
@@ -203,8 +202,8 @@ async function checkAuth() {
         if (data.loggedIn)
             onLogin(data.username);
     }
-    catch (e) {
-        console.warn('Auth check failed:', e);
+    catch (error) {
+        console.warn('Auth check failed:', error);
     }
 }
 checkAuth();

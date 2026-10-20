@@ -10,7 +10,16 @@
   <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.2/build/cjs/vexflow.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi"></script>
   <script src="{{ url_for('static', filename='js/auth.js') }}" defer></script>
-  <script src="{{ url_for('static', filename='js/composer.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/types-state.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/notes.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/notation.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/grid.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/create.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/edit.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/write.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/audio.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/export.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/saveload.js') }}" defer></script>
 
 <title>Automated Composition</title>
@@ -74,16 +83,27 @@
     <span id="currentCompositionTitle" class="projectTitle">Untitled</span>
   </div>
 </div>
-  <div class="topBarRight">
-    <div class="selectControls">
-      <button class="previousButton">←</button>
-      <button class="nextButton">→</button>
+ <div class="topBarRight">
+  <div class="selectControls">
+  <button class="previousButton">←</button>
+  <button class="nextButton">→</button>
+  <div class="modeControls">
+    <button class="modeButton" data-mode="insert" title="Insert">Ⅰ</button>
+    <button class="modeButton active" data-mode="overwrite" title="Overwrite">⦻</button>
+    <button class="modeButton" data-mode="polyphony" title="Chord">𝇑</button>
+  </div>
+</div>
+  <button class="playButton">⏵</button>
+  <div class="rightControls">
+    <div class="gridControl">
+      Grid: <span id="gridSliderValue">1/16</span>
+      <input type="range" id="gridSlider" min="0" max="5" step="1" value="1">
     </div>
-    <button class="playButton">⏵</button>
     <button id="bpmDisplay">Tempo: <span id="bpmValue">120</span> BPM
       <input type="range" id="bpmSlider" min="30" max="180" value="120" />
     </button>
   </div>
+</div>
 </div>
 
   <div class="header">
@@ -93,6 +113,7 @@
         <button class="tab-btn active" data-target="input-menu" id="createTabBtn">Create</button>
         <button class="tab-btn" data-target="edit-menu" id="editTabBtn">Edit</button>
         <button class="tab-btn hidden" data-target="load-menu" id="loadTabBtn">Load</button>
+        <button class="tab-btn hidden" data-target="export-menu" id="exportTabBtn">Export</button>
       </div>
 
       <!-- Create tab -->
@@ -111,7 +132,7 @@
           </div>
         </div>
 
-        <div class="buttonDescription">Modify</div>
+        <div class="buttonDescription">Mirror</div>
         <div class="row" style="gap: 0;"> 
           <div style="flex: 1;">
             <button class="reverseButton" style="width: 100%;">Reverse</button>
@@ -136,6 +157,7 @@
           </div>
         </div>
 
+        <div class="buttonDescription">Shift</div>
         <div class="row" style="gap: 0;"> 
           <!-- Shift -->
           <div style="flex: 1; position: relative; overflow: visible;">
@@ -161,15 +183,17 @@
           </div>
         </div>
 
+        <div class="buttonDescription">Shuffle</div>
         <div class="row">
-          <div style="flex: 1;"><button class="shuffleRhythmButton" style="width: 100%;">Shuffle Rhythm</button></div>
-          <div style="flex: 1;"><button class="shuffleNotesButton" style="width: 100%;">Shuffle Notes</button></div>
-          <div style="flex: 1;"><button class="shufflePitchButton" style="width: 100%;">Shuffle Pitch</button></div>
+          <div style="flex: 1;"><button class="shuffleRhythmButton" style="width: 100%;">Rhythm</button></div>
+          <div style="flex: 1;"><button class="shuffleNotesButton" style="width: 100%;">Notes</button></div>
+          <div style="flex: 1;"><button class="shufflePitchButton" style="width: 100%;">Pitch</button></div>
         </div>
 
+        <div class="buttonDescription">Change</div>
         <div class="row">
-          <div style="flex: 1;"><button class="changeRhythmButton" style="width: 100%;">Change Rhythm</button></div>
-          <div style="flex: 1;"><button class="changePitchButton" style="width: 100%;">Change Pitch</button></div>
+          <div style="flex: 1;"><button class="changeRhythmButton" style="width: 100%;">Rhythm</button></div>
+          <div style="flex: 1;"><button class="changePitchButton" style="width: 100%;">Pitch</button></div>
         </div>
 
         <div class="buttonDescription">Develop</div>
@@ -185,40 +209,44 @@
       </div>
 
       <!-- Load tab -->
-      <div id="load-menu" class="tab-content hidden">
-        <div id="notLoggedInMsg" class="buttonDescription">
-          Log in to save and load compositions
-        </div>
-        <div id="loggedInLoad" class="hidden">
+<div id="load-menu" class="tab-content hidden">
+  <div id="notLoggedInMsg" class="buttonDescription">
+    Log in to save and load compositions
+  </div>
+  <div id="loggedInLoad" class="hidden">
+    <div class="buttonDescription">File</div>
+    <div class="row">
+      <button class="saveButton" style="width: 100%;">💾 Save</button>
+    </div>
+    <div class="buttonDescription">Load</div>
+    <div id="compositionList" style="
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      background: white;
+    "></div>
+    <div class="buttonDescription">Project</div>
+    <div class="row">
+      <button class="newCompositionButton" style="flex: 1;">+ New</button>
+      <button class="deleteCompositionButton" style="flex: 1; color: red;">🗑 Delete</button>
+    </div>
+  </div>
+</div>
 
-          <div class="row">
-            <button class="saveButton" style="width: 100%;">💾 Save</button>
-          </div>
-
-          <!-- Load bank -->
-          <div class="buttonDescription">Compositions</div>
-          <div id="compositionList" style="
-            max-height: 200px;
-            overflow-y: auto;
-            border: 1px solid #575757;
-            background: white;
-          "></div>
-
-          <!-- Bottom actions -->
-           <div class="buttonDescription">File</div>
-          <div class="row">
-            <button class="newCompositionButton" style="flex: 1;">+ New</button>
-            <button class="deleteCompositionButton" style="flex: 1; color: red;">🗑 Delete</button>
-          </div>
-
-        </div>
-      </div>
+<!-- Export tab -->
+<div id="export-menu" class="tab-content hidden">
+  <div class="buttonDescription">Export</div>
+  <div class="row">
+    <button class="exportMidiButton" style="flex: 1;">MIDI</button>
+    <button class="exportMusicXMLButton" style="flex: 1;">MusicXML</button>
+  </div>
+</div>
     </div>
 
 
     <!-- Output -->
 <div class="output-container">
-  <div id="voiceScrollWrapper">
+  <div id="staffScrollWrapper">
   <div id="measureBarWrapper">
     <div id="layerTabs">
       <button class="layer-toggle" id="layerToggle">Main</button>
@@ -229,9 +257,9 @@
     <div id="output"></div>
 </div>
 
-<template id="voiceTemplate">
-  <div class="voiceWrapper">
-    <div class="voiceSettings">
+<template id="staffTemplate">
+  <div class="staffWrapper">
+    <div class="staffSettings">
       <div class="row">
         <select class="rootSelect">
           <option value="A">A</option>
@@ -269,13 +297,9 @@
       <div class="row">
         <button class="muteButton">Mute</button>
       </div>
-      <div style="height:100px;"></div>
-      <div class="row">
-        <button class="midiButton">MIDI</button>
-        <button class="musicXMLButton">MusicXML</button>
-      </div>
+      <div class="staffSettingsBlank"></div>
     </div>
-    <div class="voiceContainer"></div>
+    <div class="staffContainer"></div>
   </div>
 </template>
 

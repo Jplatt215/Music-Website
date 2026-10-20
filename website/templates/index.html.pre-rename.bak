@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Music Index{% endblock %}
+
+{% block content %}
+<head>
+  <!-- Link to the stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+  <script src="{{ url_for('static', filename='index.js') }}" defer></script>
+  <title>Music Index</title>
+</head>
+
+  <div class="navbar-main">
+    <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
+    <a class="nav-item nav-link" id="scales" href="/scales">Scale Calculator</a>
+    <a class="nav-item nav-link" id="composer" href="/composer">Automated Composition</a>
+  </div>
+
+    <div class="navbar-two">
+      <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
+      <a class="nav-item nav-link" id="add" href="/index/add">Add Composition</a>
+    </div>
+
+
+<h1 align="center">Music Index</h1>
+<div>
+  {% for composer_data in composers_data %}
+  <div class="composer-container">
+    <h2>
+      {{ composer_data['name'] }} ({{ composer_data['lifetime'] }})
+      <i class="fa fa-edit edit-icon" data-type="composer" data-id="{{ composer_data['id'] }}" data-name="{{ composer_data['name'] }}" data-lifetime="{{ composer_data['lifetime'] }}"></i>
+    </h2>
+    <ul>
+      {% for composition in composer_data['compositions'] %}
+      <li>
+        {% if composition.url %}
+        <a href="{{ composition.url }}" target="_blank">{{ composition.title }}</a>
+        {% else %} {{ composition.title }} {% endif %}
+        {% if composition.year %} ({{ composition.year }}) {% endif %}
+        <i class="fa fa-edit edit-icon" 
+       data-type="composition" 
+       data-id="{{ composition.id }}" 
+       data-title="{{ composition.title }}" 
+       data-year="{{ composition.year }}" 
+       data-url="{{ composition.url }}"></i>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Edit Popup Modal -->
+<div id="edit-modal" class="modal">
+  <div class="modal-content">
+    <span class="close">&times;</span>
+
+    <!-- Edit Composer Form -->
+    <form id="edit-composer-form" style="display: none;">
+      <h2>Edit Composer</h2>
+      <input type="hidden" id="edit-composer-id" />
+      <label for="composer-name">Name:</label>
+      <input type="text" id="composer-name" />
+      <br />
+      <label for="composer-lifetime">Lifetime:</label>
+      <input type="text" id="composer-lifetime" />
+      <br />
+      <button type="button" id="save-composer">Save</button>
+      <button type="button" id="delete-composer">Delete Composer</button>
+    </form>
+
+    <!-- Edit Composition Form -->
+    <form id="edit-composition-form" style="display: none;">
+      <h2>Edit Composition</h2>
+      <input type="hidden" id="edit-composition-id" />
+      <label for="composition-title">Title:</label>
+      <input type="text" id="composition-title" />
+      <br />
+      <label for="composition-year">Year(s) composed:</label>
+      <input type="text" id="composition-year" />
+      <br />
+      <label for="composition-url">URL:</label>
+      <input type="text" id="composition-url" />
+      <br />
+      <button type="button" id="save-composition">Save</button>
+      <button type="button" id="delete-composition">Delete Composition</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

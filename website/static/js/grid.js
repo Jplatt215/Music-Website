@@ -373,6 +373,7 @@ function renderGridOverlays(staffList) {
         }
         svg.appendChild(group);
     }
+    refreshSelectedNotes();
 }
 const HANDLE_W = 3;
 const HANDLE_HIT = 8;

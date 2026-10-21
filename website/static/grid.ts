@@ -372,6 +372,7 @@ function renderGridOverlays(staffList: Staff[]): void {
 
     svg.appendChild(group);
   }
+  refreshSelectedNotes();
 }
 
 const HANDLE_W = 3;

@@ -465,6 +465,15 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
   if ((event.key === 'g' || event.key === 'G') && !event.ctrlKey && !event.metaKey) setGridView(!gridViewOn);
 });
 
+document.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (event.key !== 'Escape') return;
+  const targetElement = event.target as HTMLElement;
+  const typing = (targetElement.tagName === 'INPUT' && (targetElement as HTMLInputElement).type !== 'range') ||
+    targetElement.tagName === 'SELECT' || targetElement.tagName === 'TEXTAREA' || targetElement.isContentEditable;
+  if (typing) return;
+  for (const staffName of staves) clearSelection(staffName);
+});
+
 gridSlider?.addEventListener('input', () => {
   const index = parseInt(gridSlider.value, 10);
   gridDivision = GRID_DIVISIONS[index];
@@ -514,3 +523,5 @@ setupEntryInteraction();
 setupClipboardKeys();
 
 ignoreBlankClicksWhileWriting();
+
+setupScaleWidget();

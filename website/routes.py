@@ -14,10 +14,6 @@ routes = Blueprint('routes', __name__)
 def home():
     return render_template("composer.html", user=current_user)
 
-@routes.route('/scales', methods=['GET', 'POST'])
-def scales():
-    return render_template('scales.html', user=current_user)
-
 @routes.route('/composer', methods=['GET', 'POST'])
 def composer():
     return render_template('composer.html', user=current_user)

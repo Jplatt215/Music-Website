@@ -1,0 +1,83 @@
+/* Scale calculator popout (opened from the top bar icon).
+   Sizes are in em: the script sets the panel's width and font size, so resizing scales everything. */
+
+#scaleWidgetBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 6px; margin: 0 6px; background: transparent; color: inherit;
+  border: 1px solid transparent; cursor: pointer; vertical-align: middle;
+}
+#scaleWidgetBtn:hover, #scaleWidgetBtn[aria-expanded="true"] { background: rgba(128, 128, 128, 0.25); }
+#scaleWidgetBtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+
+.sw-panel {
+  position: fixed; top: 64px; right: 24px; z-index: 1000;
+  box-sizing: border-box; padding: 0 0 1.2em; font-size: 14px;
+  background: #f2f2f2; color: #222; border: 1px solid #bbb; 
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); font-family: 'Times New Roman', Times, serif
+}
+.sw-panel.hidden { display: none; }
+
+.sw-title {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.6em 0.9em; background: #2b2b33; color: #bbb; 
+  cursor: move; user-select: none;
+}
+.sw-close { background: none; border: none; color: #fff; font-size: 1.1em; cursor: pointer; }
+
+.sw-tabs { display: flex; gap: 0.3em; padding: 0.6em 0.9em 0; }
+.sw-tabbtn { padding: 0.4em 0.9em; font-size: 1em; border: 1px solid #bbb; border-bottom: none; background: #f2f2f2; cursor: pointer; }
+.sw-tabbtn.active { background: #dbdbdb;}
+
+.sw-tab { padding: 0.8em 0.9em 0.3em; border-top: 1px solid #bbb; }
+.sw-tab[hidden] { display: none; }
+.sw-row { display: flex; flex-wrap: wrap; gap: 0.3em; margin-bottom: 0.6em; }
+.sw-btn { padding: 0.3em 0.7em; font-size: 1em; border: 1px solid #aaa; background: #f4f4f4; cursor: pointer; }
+.sw-btn:hover { background: #e6e6e6; }
+.sw-btn.active { background: #3b6fd4; border-color: #3b6fd4; color: #eeeeee; }
+.sw-run { margin: 0.3em 0 0.6em; }
+.sw-hint { margin: 0 0 0.6em; color: #555; }
+.sw-results { max-height: 10em; overflow-y: auto; }
+.sw-results div { padding: 0.15em 0; }
+
+/* Scales List: one colored tab per scale (three shades of blue), then the dropdowns for the chosen one */
+.sw-entrytabs { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3em; margin-bottom: 0.6em; }
+.sw-scaletab { display: inline-flex; align-items: stretch; border: 1px solid #888; background: var(--sw-color); }
+.sw-scaletab.active { box-shadow: inset 0 -0.2em 0 #222; font-weight: bold; }
+.sw-color-0 { --sw-color: #bcd8ff; }
+.sw-color-1 { --sw-color: #6aa5f5; }
+.sw-color-2 { --sw-color: #2f66c8; color: #fff; }   /* the darkest shade needs light text */
+.sw-scalepick, .sw-scaleclose { background: transparent; border: none; color: inherit; font: inherit; cursor: pointer; padding: 0.3em 0.7em; }
+.sw-scaleclose { padding-left: 0.2em; }
+.sw-scalepick:hover, .sw-scaleclose:hover { background: rgba(0, 0, 0, 0.12); }
+.sw-select { flex: 1 1 0; font: inherit; padding: 0.25em 0.4em; border: 1px solid #888; background: var(--sw-color, #f4f4f4); }
+
+.sw-scroller { overflow-x: auto; margin: 0.5em 0.9em 0; border: 1px solid #aaa; background: #ddd; }
+.sw-keyboard { position: relative; width: 100%; min-width: 520px; aspect-ratio: 52 / 5.6; }   /* 52 white keys; stays in proportion */
+.sw-key { position: absolute; top: 0; box-sizing: border-box; cursor: pointer; }
+.sw-white { height: 100%; background: #fff; border: 1px solid #3a3a3a; z-index: 1; }
+.sw-black { height: 62%; background: #222; border: 1px solid #3a3a3a; z-index: 2; }
+.sw-key:active { filter: brightness(0.85); }
+
+/* resize grip, bottom-right corner */
+.sw-grip {
+  position: absolute; right: 2px; bottom: 2px; width: 1.2em; height: 1.2em; cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, #888 50%, #888 58%, transparent 58%, transparent 72%, #888 72%, #888 80%, transparent 80%);
+}
+
+/* Selected Notes tab */
+.sw-staffbox { background: #fff; border: 1px solid #888; margin: 0.4em 0; padding: 0.3em; text-align: center; overflow: auto; }
+.sw-staffbox svg { display: inline-block; }
+.sw-key.sw-selected-note { background: #e8d7b9; }
+.sw-selected-body .sw-btn.active { background: #e8d7b9; border-color: #c9b48f; color: #222; }
+.sw-notedisplay .sw-btn { pointer-events: none; }
+
+/* Find Scale tab: everything that is "on" is light red */
+.sw-find-body .sw-btn.active { background: #ee9a9a; border-color: #d96b6b; color: #222; }
+.sw-findgroup { display: inline-grid; grid-template-columns: auto auto auto; gap: 0.3em 0.6em; margin-bottom: 0.6em; }
+.sw-findgroup .sw-row { flex-wrap: nowrap; margin-bottom: 0; }
+.sw-findgroup .sw-run { margin: 0; }
+.sw-findgroup .sw-clear { grid-column: span 2; }
+.sw-find-body .sw-results { display: flex; flex-wrap: wrap; gap: 0.4em; max-height: 7em; }
+.sw-resultbox { display: flex; flex-direction: column; text-align: left; padding: 0.3em 0.7em; font: inherit; border: 1px solid #d96b6b; background: #ee9a9a; color: #222; cursor: pointer; }
+.sw-resultbox:hover { background: #e68686; }
+.sw-resultbox.active { background: #d96b6b; border-color: #c25252; }

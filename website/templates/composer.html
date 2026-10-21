@@ -6,6 +6,7 @@
 <head>
   <link rel="stylesheet" href="{{ url_for('static', filename='composer.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='global.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='scale-widget.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/tone@14.8.39/build/Tone.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.2/build/cjs/vexflow.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi"></script>
@@ -19,17 +20,17 @@
   <script src="{{ url_for('static', filename='js/write.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/audio.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/export.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/scales.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/saveload.js') }}" defer></script>
 
-<title>Automated Composition</title>
+<title>Composition</title>
 </head>
 <body>
 
   <div class="navbar-main">
     <a class="nav-item nav-link" id="index" href="/index">Music Index</a>
-    <a class="nav-item nav-link" id="scales" href="/scales">Scale Calculator</a>
-    <a class="nav-item nav-link" id="composer" href="/composer">Automated Composition</a>
+    <a class="nav-item nav-link" id="composer" href="/composer">Composition</a>
 
     <!-- Auth section -->
     <div class="nav-auth">
@@ -95,9 +96,13 @@
 </div>
   <button class="playButton">⏵</button>
   <div class="rightControls">
+    <button id="scaleWidgetBtn" type="button" title="Scale calculator" aria-label="Scale calculator" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="1.5"/><path d="M7 5v14M12 5v14M17 5v14"/><path d="M5.8 5v7.5M10.8 5v7.5M15.8 5v7.5" stroke-width="3"/></svg>
+      </button>
     <div class="gridControl">
       Grid: <span id="gridSliderValue">1/16</span>
       <input type="range" id="gridSlider" min="0" max="5" step="1" value="1">
+
     </div>
     <button id="bpmDisplay">Tempo: <span id="bpmValue">120</span> BPM
       <input type="range" id="bpmSlider" min="30" max="180" value="120" />
@@ -128,7 +133,7 @@
         <div class="buttonDescription">Accompany</div>
         <div class="row">
           <div style="flex: 1;">
-            <button class="separateVoiceButton" style="width: 100%;">Separate</button>
+            <button class="separateStaffButton" style="width: 100%;">Separate</button>
           </div>
         </div>
 

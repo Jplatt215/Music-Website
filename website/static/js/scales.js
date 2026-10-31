@@ -5,9 +5,7 @@
 // Semitones above the root. The overtone series is counted in keys, so it reaches up several octaves.
 const calculatorScales = {
     'Major': [0, 2, 4, 5, 7, 9, 11],
-    'Minor': [0, 2, 3, 5, 7, 8, 10],
     'Pentatonic Major': [0, 2, 4, 7, 9],
-    'Pentatonic Minor': [0, 3, 5, 7, 10],
     'MOLT 1': [0, 2, 4, 6, 8, 10],
     'MOLT 2': [0, 1, 3, 4, 6, 7, 9, 10],
     'MOLT 3': [0, 2, 3, 4, 6, 7, 8, 10, 11],
@@ -28,7 +26,7 @@ const SCALE_COLORS = ['#bcd8ff', '#6aa5f5', '#2f66c8'];
 // Where each new scale starts out, so a second scale does not simply cover the first
 const NEW_SCALE_DEFAULTS = [
     { root: 'C', scaleName: 'Major' },
-    { root: 'A', scaleName: 'Minor' },
+    { root: 'D', scaleName: 'Major' },
     { root: 'G', scaleName: 'Major' },
 ];
 // Text and buttons are sized in em, so changing the panel's font size scales them together.

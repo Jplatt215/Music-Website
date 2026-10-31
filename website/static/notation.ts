@@ -724,14 +724,7 @@ function captureMeasureLayout(staff: Staff, measureIndex: number, stave: any, no
   let yTop        = stave.getYForLine(0) - 45;
   let yBottom     = stave.getYForLine(4) + 45;
 
-  // notes with many ledger lines reach beyond the stave: the band (and the grid) grows to include them
-  for (const note of notes) {
-    try {
-      for (const yPos of note.getYs()) { yTop = Math.min(yTop, yPos - 20); yBottom = Math.max(yBottom, yPos + 20); }
-    } catch (error) {
-      // not formatted
-    }
-  }
+
 
   const lines: GridLine[] = [
     { t: startTime, x: xStart, kind: 'bar' },

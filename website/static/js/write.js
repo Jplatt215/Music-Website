@@ -615,37 +615,39 @@ function restoreClickState() {
     Object.assign(clearedSelections, before.cleared);
     renderGridOverlays(Object.values(getActiveStaves()));
 }
+// Double-click writing on one track (called for every track, including ones added later)
+function setupTrackEntryInteraction(partName) {
+    const el = containers[partName];
+    // Capture phase, so this runs before the selection handler: remember the selection, and any click stops writing
+    el.addEventListener('mousedown', (event) => {
+        if (event.button !== 0)
+            return;
+        rememberClickState();
+        stopEntry();
+    }, true);
+    // Double-click: start writing here, in the voice of the nearest note (Up 1 if there is none).
+    // This staff's selection goes away; other staves keep theirs.
+    el.addEventListener('dblclick', (event) => {
+        if (!gridViewOn)
+            return;
+        const staff = getActiveStaves()[partName];
+        const pt = localPoint(partName, event);
+        if (!staff || !pt || !inStaffBand(partName, pt.y))
+            return;
+        restoreClickState();
+        selections[currentLayer][partName] = null; // writing starts clean: nothing on this staff stays selected
+        renderGridOverlays(Object.values(getActiveStaves()));
+        const total = totalLength();
+        const tHit = Math.min(rawTimeFromX(partName, pt.x), total - 1e-6);
+        const pick = pickCandidate(candidatesAt(staff, tHit, pt.y), partName, pt.x, pt.y);
+        const voice = pick ? pick.voice : staff;
+        startEntry(partName, entryTimeFromX(partName, pt.x, voice), voice.id);
+    });
+    // The caret lives inside the drawing, so it has to be put back whenever the staff is redrawn
+    new MutationObserver(() => drawEntryCaret()).observe(el, { childList: true });
+}
 function setupEntryInteraction() {
-    for (const partName of Object.keys(containers)) {
-        const el = containers[partName];
-        // Capture phase, so this runs before the selection handler: remember the selection, and any click stops writing
-        el.addEventListener('mousedown', (event) => {
-            if (event.button !== 0)
-                return;
-            rememberClickState();
-            stopEntry();
-        }, true);
-        // Double-click: start writing here, in the voice of the nearest note (Up 1 if there is none).
-        // This staff's selection goes away; other staves keep theirs.
-        el.addEventListener('dblclick', (event) => {
-            if (!gridViewOn)
-                return;
-            const staff = getActiveStaves()[partName];
-            const pt = localPoint(partName, event);
-            if (!staff || !pt || !inStaffBand(partName, pt.y))
-                return;
-            restoreClickState();
-            selections[currentLayer][partName] = null; // writing starts clean: nothing on this staff stays selected
-            renderGridOverlays(Object.values(getActiveStaves()));
-            const total = totalLength();
-            const tHit = Math.min(rawTimeFromX(partName, pt.x), total - 1e-6);
-            const pick = pickCandidate(candidatesAt(staff, tHit, pt.y), partName, pt.x, pt.y);
-            const voice = pick ? pick.voice : staff;
-            startEntry(partName, entryTimeFromX(partName, pt.x, voice), voice.id);
-        });
-        // The caret lives inside the drawing, so it has to be put back whenever the staff is redrawn
-        new MutationObserver(() => drawEntryCaret()).observe(el, { childList: true });
-    }
+    Object.keys(containers).forEach(setupTrackEntryInteraction);
     // Mouse wheel: the length of the next note (the page does not scroll while writing)
     document.addEventListener('wheel', (event) => {
         if (!entryState.entry)

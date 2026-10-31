@@ -10,17 +10,19 @@ let contexts = {};
 const staves = ["staff1", "staff2", "staff3", "staff4"];
 const output = document.getElementById("output");
 const template = document.getElementById("staffTemplate");
-const createStaffContainers = (staffNames, activeStaff = "staff1") => {
-    staffNames.forEach(name => {
-        const clone = template.content.cloneNode(true);
-        const settings = clone.querySelector(".staffSettings");
-        const container = clone.querySelector(".staffContainer");
-        settings.dataset.staff = name;
-        container.dataset.name = name;
-        container.id = `${name}Container`;
-        output.appendChild(clone);
-        containers[name] = container;
-    });
+// Add one track's settings panel and staff container to the page (at the end, or before another element)
+const createStaffContainer = (name, before = null) => {
+    const clone = template.content.cloneNode(true);
+    const settings = clone.querySelector(".staffSettings");
+    const container = clone.querySelector(".staffContainer");
+    settings.dataset.staff = name;
+    container.dataset.name = name;
+    container.id = `${name}Container`;
+    output.insertBefore(clone, before);
+    containers[name] = container;
+};
+const createStaffContainers = (staffNames) => {
+    staffNames.forEach(name => createStaffContainer(name));
 };
 const generatePhraseButton = document.querySelector('.generatePhraseButton');
 const separateStaffButton = document.querySelector('.separateStaffButton');
@@ -119,8 +121,13 @@ const defaultPitchRanges = {
     staff3: ["E2", "C4"],
     staff4: ["D3", "B5"],
 };
+const DEFAULT_TRACKS = ["staff1", "staff2", "staff3", "staff4"];
+// Added tracks have no entry in defaultPitchRanges, so they get a wide middle range
+function defaultPitchRange(name) {
+    return defaultPitchRanges[name] ?? ["C3", "C6"];
+}
 function resetStaffToDefaults(staff, rhythmRange) {
-    staff.pitchRange = [...defaultPitchRanges[staff.name]];
+    staff.pitchRange = [...defaultPitchRange(staff.name)];
     staff.rhythmRange = [...rhythmRange];
     staff.scale = ["C", "Chromatic"];
     staff.harmonize = false;

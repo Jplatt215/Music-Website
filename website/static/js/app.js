@@ -163,7 +163,8 @@ function populateStaffSettings(settings, staffName) {
     if (muteButton)
         muteButton.classList.toggle('active', staff.muted);
 }
-document.querySelectorAll(".staffSettings").forEach(settings => {
+// Wire up one track's settings panel (called for each track, including ones added later)
+function setupStaffSettings(settings) {
     const staffName = settings.dataset.staff;
     const muteButton = settings.querySelector('.muteButton');
     const rootSelect = settings.querySelectorAll('.rootSelect')[0];
@@ -218,8 +219,10 @@ document.querySelectorAll(".staffSettings").forEach(settings => {
         mainStaves[staffName].harmonize = harmonizeButton.classList.contains('active');
         saveToLocalStorage();
     });
-});
-document.querySelectorAll('.staffSettingsBlank').forEach(blank => {
+}
+document.querySelectorAll(".staffSettings").forEach(setupStaffSettings);
+// Clicking the blank part of a track's settings selects (or deselects) the whole track
+function setupSettingsBlank(blank) {
     blank.addEventListener('click', () => {
         const settings = blank.closest('.staffSettings');
         const staffName = settings.dataset.staff;
@@ -232,7 +235,183 @@ document.querySelectorAll('.staffSettingsBlank').forEach(blank => {
             setSelection(staffName, { start: 0, end: totalDur });
         }
     });
-});
+}
+document.querySelectorAll('.staffSettingsBlank').forEach(setupSettingsBlank);
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Tracks: add and delete (right-click a track's settings) and reorder (drag its settings up or down)
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+const TRACK_DRAG_START_PX = 6;
+let lastTrackNumber = staves.length; // new tracks are numbered upward and never reuse a number
+function nextTrackName() {
+    lastTrackNumber += 1;
+    return `staff${lastTrackNumber}`;
+}
+function trackWrapper(name) {
+    return containers[name]?.closest('.staffWrapper');
+}
+function trackHasNotes(name) {
+    return [mainStaves[name], harmonyStaves[name]].some(staff => staffVoices(staff).some(voice => voice.unprocessedNotes.some(note => !note.isRest)));
+}
+function removeTrack(name) {
+    if (entryState.entry?.staffName === name)
+        stopEntry();
+    trackWrapper(name)?.remove();
+    delete containers[name];
+    delete renderers[name];
+    delete contexts[name];
+    delete mainStaves[name];
+    delete harmonyStaves[name];
+    delete gridLayout[name];
+    delete clipboard[name];
+    for (const layer of ['main', 'harmony']) {
+        delete selections[layer][name];
+        if (lastSelectedStaff[layer] === name)
+            lastSelectedStaff[layer] = null;
+    }
+    staves.splice(staves.indexOf(name), 1);
+}
+function addTrack(name) {
+    createStaffContainers([name]);
+    renderers[name] = new Renderer(containers[name], Renderer.Backends.SVG);
+    contexts[name] = renderers[name].getContext();
+    mainStaves[name] = new Staff(name, [...defaultPitchRange(name)]);
+    harmonyStaves[name] = new Staff(name, [...defaultPitchRange(name)], [0.25, 1]);
+    staves.push(name);
+    processNotes(mainStaves[name], fillDurationWithRests(totalLength()));
+    processNotes(harmonyStaves[name], fillDurationWithRests(totalLength()));
+    const settings = document.querySelector(`.staffSettings[data-staff="${name}"]`);
+    setupStaffSettings(settings);
+    setupSettingsBlank(settings.querySelector('.staffSettingsBlank'));
+    setupTrackControls(settings);
+    setupTrackGridInteraction(name);
+    setupTrackEntryInteraction(name);
+    settings.querySelectorAll('.harmonizeButton').forEach(button => {
+        button.style.display = currentLayer === 'main' ? '' : 'none';
+    });
+}
+// Make the tracks exactly these names, in this order (adding and removing as needed). Does not redraw.
+function applyTrackOrder(names) {
+    for (const name of [...staves])
+        if (!names.includes(name))
+            removeTrack(name);
+    for (const name of names)
+        if (!staves.includes(name))
+            addTrack(name);
+    staves.splice(0, staves.length, ...names);
+    for (const name of names)
+        output.appendChild(trackWrapper(name));
+    for (const name of names)
+        lastTrackNumber = Math.max(lastTrackNumber, parseInt(name.replace(/\D/g, ''), 10) || 0);
+}
+function changeTracks(names) {
+    applyTrackOrder(names);
+    renderGridOverlays(Object.values(getActiveStaves()));
+    drawAllStaves();
+    updateMemory();
+}
+function insertTrackNextTo(name, offset) {
+    const names = [...staves];
+    names.splice(names.indexOf(name) + offset, 0, nextTrackName());
+    changeTracks(names);
+}
+function deleteTrack(name) {
+    if (staves.length <= 1)
+        return;
+    if (trackHasNotes(name) && !confirm('Delete this track and its notes?'))
+        return;
+    changeTracks(staves.filter(other => other !== name));
+}
+let closeTrackMenu = null;
+function openTrackMenu(event, name) {
+    closeTrackMenu?.();
+    const menu = document.createElement('div');
+    menu.className = 'trackMenu';
+    menu.style.cssText = `position: fixed; left: ${event.clientX}px; top: ${event.clientY}px; z-index: 10000;`;
+    const items = [
+        { label: 'Add track above', disabled: false, run: () => insertTrackNextTo(name, 0) },
+        { label: 'Add track below', disabled: false, run: () => insertTrackNextTo(name, 1) },
+        { label: 'Delete track', disabled: staves.length <= 1, run: () => deleteTrack(name) },
+    ];
+    for (const item of items) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'trackMenuItem';
+        button.style.cssText = 'display: block; width: 100%;';
+        button.textContent = item.label;
+        button.disabled = item.disabled;
+        button.addEventListener('click', () => { closeTrackMenu?.(); item.run(); });
+        menu.appendChild(button);
+    }
+    document.body.appendChild(menu);
+    const closeOnOutsideClick = (outsideEvent) => { if (!menu.contains(outsideEvent.target))
+        closeTrackMenu?.(); };
+    const closeOnEscape = (keyEvent) => { if (keyEvent.key === 'Escape')
+        closeTrackMenu?.(); };
+    closeTrackMenu = () => {
+        menu.remove();
+        document.removeEventListener('pointerdown', closeOnOutsideClick, true);
+        document.removeEventListener('keydown', closeOnEscape);
+        window.removeEventListener('scroll', closeOnOutsideClick, true);
+        closeTrackMenu = null;
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick, true);
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('scroll', closeOnOutsideClick, true);
+}
+// Drag a track's settings up or down; the track follows the pointer and the new order is kept on release
+function startTrackDrag(settings, startEvent) {
+    const name = settings.dataset.staff;
+    const wrapper = trackWrapper(name);
+    const startY = startEvent.clientY;
+    let dragging = false;
+    const onMove = (moveEvent) => {
+        if (!dragging) {
+            if (Math.abs(moveEvent.clientY - startY) < TRACK_DRAG_START_PX)
+                return;
+            dragging = true;
+            wrapper.classList.add('trackDragging');
+            document.body.style.userSelect = 'none';
+        }
+        const others = staves.filter(other => other !== name).map(other => trackWrapper(other));
+        const next = others.find(other => {
+            const box = other.getBoundingClientRect();
+            return moveEvent.clientY < box.top + box.height / 2;
+        });
+        if (next && wrapper.nextElementSibling !== next)
+            output.insertBefore(wrapper, next);
+        else if (!next && output.lastElementChild !== wrapper)
+            output.appendChild(wrapper);
+    };
+    const onUp = () => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        if (!dragging)
+            return;
+        wrapper.classList.remove('trackDragging');
+        document.body.style.userSelect = '';
+        // the drag ends in a click on the settings, which must not select the track
+        const swallowClick = (clickEvent) => clickEvent.stopPropagation();
+        document.addEventListener('click', swallowClick, true);
+        window.setTimeout(() => document.removeEventListener('click', swallowClick, true), 50);
+        const order = [...output.querySelectorAll('.staffContainer')].map(container => container.dataset.name);
+        if (order.join() !== staves.join())
+            changeTracks(order);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+}
+function setupTrackControls(settings) {
+    settings.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        openTrackMenu(event, settings.dataset.staff);
+    });
+    settings.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('select, button, input'))
+            return;
+        startTrackDrag(settings, event);
+    });
+}
+document.querySelectorAll('.staffSettings').forEach(settings => setupTrackControls(settings));
 document.addEventListener('click', (event) => {
     const bar = document.getElementById('measureBar');
     if (bar && !bar.contains(event.target)) {
@@ -445,6 +624,15 @@ document.addEventListener('keydown', (event) => {
         return;
     for (const staffName of staves)
         clearSelection(staffName);
+});
+document.addEventListener('keydown', (event) => {
+    const targetElement = event.target;
+    const typing = targetElement.tagName === 'INPUT' || targetElement.tagName === 'SELECT' ||
+        targetElement.tagName === 'TEXTAREA' || targetElement.isContentEditable;
+    if (typing || entryState.entry)
+        return;
+    if (handleArrowKey(event))
+        event.preventDefault();
 });
 gridSlider?.addEventListener('input', () => {
     const index = parseInt(gridSlider.value, 10);

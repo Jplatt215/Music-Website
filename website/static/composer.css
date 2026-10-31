@@ -429,7 +429,7 @@ button.active {
   display: block;
 }
 
-#staff1Container, #staff2Container, #staff3Container, #staff4Container {
+.staffContainer {
   height: 300px;
   overflow: visible;
   padding-left: 30px;
@@ -869,3 +869,13 @@ body:not(.gridView) .staffSettingsBlank { pointer-events: none; cursor: default;
 
 .entryCaretNote { fill: #2e86de; font-size: 40px; }
 .entryCaretDot  { fill: #2e86de; transform: translateX(8px); }
+
+.trackMenu { background: #f4f4f4; border: 1px solid #888; font-family: 'Times New Roman', serif; }
+.trackMenuItem { padding: 0.35em 1em; text-align: left; background: none; border: 0; cursor: pointer; font: inherit; }
+.trackMenuItem:hover:not(:disabled) { background: #d8d8d8; }
+.trackMenuItem:disabled { color: #999; cursor: default; }
+.trackDragging { opacity: 0.6; }
+
+.staffContainer,
+.staffContainer svg text { user-select: none; -webkit-user-select: none; }
+.gridLabel { pointer-events: none; }

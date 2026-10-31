@@ -143,12 +143,14 @@ function getCompositionData() {
         mainData[staffName] = serializeStaff(mainStaves[staffName]);
         harmonyData[staffName] = serializeStaff(harmonyStaves[staffName]);
     }
-    return { timeSignature: [measureSigs[0].num, measureSigs[0].den], measureSigs: sigsForSave(), numMeasures, main: mainData, harmony: harmonyData };
+    return { timeSignature: [measureSigs[0].num, measureSigs[0].den], measureSigs: sigsForSave(), numMeasures, trackOrder: [...staves], main: mainData, harmony: harmonyData };
 }
 function loadCompositionData(data) {
     data = migrateLegacyStaffKeys(data);
     numMeasures = data.numMeasures;
     measureSigs = sigsFromData(data);
+    // saves made before tracks could be added or moved have the four original tracks
+    applyTrackOrder(Array.isArray(data.trackOrder) && data.trackOrder.length ? data.trackOrder : DEFAULT_TRACKS);
     for (const staffName of staves) {
         restoreStaff(mainStaves[staffName], data.main[staffName]);
         restoreStaff(harmonyStaves[staffName], data.harmony[staffName]);
@@ -360,6 +362,7 @@ newCompositionButton?.addEventListener('click', () => {
         return;
     numMeasures = 1;
     measureSigs = [makeSig(4, 4)];
+    applyTrackOrder(DEFAULT_TRACKS);
     for (const staffName of staves) {
         resetStaffToDefaults(mainStaves[staffName], [0.03125, 1]);
         resetStaffToDefaults(harmonyStaves[staffName], [0.25, 1]);

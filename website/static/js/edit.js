@@ -1072,3 +1072,212 @@ function refreshEditMenu() {
         button.disabled = !enabled;
     });
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Arrow keys: Left / Right move the selected notes in time by one grid step; Up / Down change their pitch
+// (Shift = by scale degree, Alt = by octave). Edit tab only.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+const LOWEST_PIANO_MIDI = 21; // A0
+const HIGHEST_PIANO_MIDI = 108; // C8
+// Cuts every cell that spans one of the points in two, so the points become cell boundaries. Null if a tuplet would be cut.
+function splitCellsAt(cells, points) {
+    let failed = false;
+    const out = [];
+    cells.forEach(cell => {
+        const inside = points.filter(point => point > cell.start + 1e-9 && point < cell.end - 1e-9).sort((first, second) => first - second);
+        if (!inside.length) {
+            out.push(cell);
+            return;
+        }
+        if (cell.isTuplet) {
+            failed = true;
+            return;
+        }
+        const edges = [cell.start, ...inside, cell.end];
+        for (let index = 0; index < edges.length - 1; index++) {
+            out.push({ ...cell, start: edges[index], end: edges[index + 1], notes: piecesFor(cell, edges[index], edges[index + 1]) });
+        }
+    });
+    return failed ? null : out;
+}
+// The cells the selection covers in one voice, and where they begin and end. Null if there are none or a tuplet is among them.
+function movableBlock(cells, selection) {
+    const indexes = selectedCellIndices(cells, selection.start, selection.end);
+    if (!indexes.length || indexes.some(index => cells[index].isTuplet))
+        return null;
+    return { indexes, blockStart: cells[indexes[0]].start, blockEnd: cells[indexes[indexes.length - 1]].end };
+}
+function fitsInVoice(blockStart, blockEnd, delta, total) {
+    return round(blockStart + delta) >= -1e-9 && round(blockEnd + delta) <= total + 1e-9;
+}
+// Overwrite: the notes land on top of whatever is there, and the time they leave becomes rests
+function moveByOverwrite(notes, selection, delta) {
+    const cells = buildCells(notes);
+    const block = movableBlock(cells, selection);
+    if (!block || !fitsInVoice(block.blockStart, block.blockEnd, delta, notesDuration(notes)))
+        return null;
+    let work = clearCells(cells, block.blockStart, block.blockEnd);
+    if (!work)
+        return null;
+    for (const index of block.indexes) {
+        const cell = cells[index];
+        if (cell.isRest)
+            continue; // a moved rest does not wipe out the notes it lands on
+        work = paint(work, round(cell.start + delta), round(cell.end + delta), cell.notes);
+        if (!work)
+            return null;
+    }
+    return work.flatMap(cell => cell.notes);
+}
+// Insert: the notes trade places with the stretch of music next to them, so nothing is lost or overwritten
+function moveByInsert(notes, selection, delta) {
+    const block = movableBlock(buildCells(notes), selection);
+    if (!block || !fitsInVoice(block.blockStart, block.blockEnd, delta, notesDuration(notes)))
+        return null;
+    const { blockStart, blockEnd } = block;
+    const hopFrom = delta > 0 ? blockEnd : round(blockStart + delta);
+    const hopTo = delta > 0 ? round(blockEnd + delta) : blockStart;
+    const cells = splitCellsAt(buildCells(notes), [hopFrom, hopTo]);
+    if (!cells)
+        return null;
+    const before = cells.filter(cell => cell.end <= Math.min(hopFrom, blockStart) + 1e-9);
+    const after = cells.filter(cell => cell.start >= Math.max(hopTo, blockEnd) - 1e-9);
+    const blockCells = cells.filter(cell => cell.start >= blockStart - 1e-9 && cell.end <= blockEnd + 1e-9);
+    const hopCells = cells.filter(cell => cell.start >= hopFrom - 1e-9 && cell.end <= hopTo + 1e-9);
+    const ordered = delta > 0 ? [...before, ...hopCells, ...blockCells, ...after] : [...before, ...blockCells, ...hopCells, ...after];
+    return ordered.flatMap(cell => cell.notes);
+}
+// Polyphony: like Overwrite, but a note that lands on notes of other pitches goes to the first voice that is free there
+function moveByPolyphony(ctx, delta) {
+    const work = {};
+    const cellsOf = (id) => {
+        if (!work[id]) {
+            const voice = getVoice(ctx.part, id);
+            work[id] = voice ? buildCells(voice.unprocessedNotes) : emptyVoiceCells(notesDuration(ctx.store.unprocessedNotes));
+        }
+        return work[id];
+    };
+    const moving = [];
+    for (const group of ctx.groups) {
+        const id = group.store.id;
+        const cells = cellsOf(id);
+        const block = movableBlock(cells, ctx.sel);
+        if (!block || !fitsInVoice(block.blockStart, block.blockEnd, delta, notesDuration(group.store.unprocessedNotes)))
+            return null;
+        const cleared = clearCells(cells, block.blockStart, block.blockEnd);
+        if (!cleared)
+            return null;
+        moving.push({ id, cells: block.indexes.map(index => cells[index]) });
+        work[id] = cleared;
+    }
+    let spread = false;
+    const touched = new Set(moving.map(entry => entry.id));
+    for (const { id, cells } of moving) {
+        for (const cell of cells) {
+            if (cell.isRest)
+                continue;
+            const from = round(cell.start + delta);
+            const to = round(cell.end + delta);
+            const mine = new Set(midiPitches(cell.notes[0]));
+            const candidates = [id, ...VOICE_DEFS.map(voiceDef => voiceDef.id).filter(other => other !== id)];
+            const destination = candidates.find(candidate => !overlappingCells(cellsOf(candidate), from, to).some(other => blocksPitches(other, mine)));
+            if (!destination)
+                return null;
+            const painted = paint(cellsOf(destination), from, to, cell.notes);
+            if (!painted)
+                return null;
+            work[destination] = painted;
+            touched.add(destination);
+            if (destination !== id)
+                spread = true;
+        }
+    }
+    const changes = {};
+    for (const id of touched)
+        changes[id] = work[id].flatMap(cell => cell.notes);
+    return { changes, spread };
+}
+// Moves the selected notes in time by `delta` whole notes (negative = earlier), following the Insert / Polyphony / Overwrite mode
+function moveSelectedInTime(ctx, delta) {
+    let changes = {};
+    let spread = false;
+    if (polyphonyMode && !insertMode) {
+        const result = moveByPolyphony(ctx, delta);
+        if (!result)
+            return;
+        changes = result.changes;
+        spread = result.spread;
+    }
+    else {
+        for (const group of ctx.groups) {
+            const moved = insertMode
+                ? moveByInsert(group.store.unprocessedNotes, ctx.sel, delta)
+                : moveByOverwrite(group.store.unprocessedNotes, ctx.sel, delta);
+            if (!moved)
+                return; // if one voice can't move, none do
+            changes[group.store.id] = moved;
+        }
+    }
+    for (const id of Object.keys(changes)) {
+        if (tupletCrossesBarline(changes[id], 0, Infinity))
+            return;
+    }
+    const start = round(ctx.sel.start + delta);
+    const end = round(ctx.sel.end + delta);
+    commitVoiceEdits(ctx.part, changes, { start, end, voice: spread ? 'all' : ctx.sel.voice, base: { start, end } }, null);
+}
+// One pitch moved a step up (+1) or down (-1); null if it would leave the piano
+function steppedPitch(name, octave, staff, step, direction) {
+    const midi = soundingMidi(name, octave);
+    let newMidi = midi + direction;
+    if (step === 'octave') {
+        newMidi = midi + 12 * direction;
+    }
+    else if (step === 'degree') {
+        const rootIndex = noteMapping[staff.scale[0]];
+        const scale = scalesMapping[staff.scale[1]];
+        const inScale = (value) => scale.includes((((value - rootIndex) % 12) + 12) % 12);
+        for (let tries = 0; tries < 12 && !inScale(newMidi); tries++)
+            newMidi += direction;
+    }
+    if (newMidi < LOWEST_PIANO_MIDI || newMidi > HIGHEST_PIANO_MIDI)
+        return null;
+    if (step === 'octave')
+        return { name, octave: octave + direction }; // keeps the spelling
+    return spellMidi(newMidi, staff.scale);
+}
+function movePitchOfSelection(ctx, step, direction) {
+    const moveNote = (note) => {
+        const names = [];
+        const octaves = [];
+        for (let index = 0; index < note.noteName.length; index++) {
+            const moved = steppedPitch(note.noteName[index], note.octaves[index], ctx.part, step, direction);
+            if (!moved)
+                return null;
+            names.push(moved.name);
+            octaves.push(moved.octave);
+        }
+        return dedupePitches({ names, octaves });
+    };
+    const pitched = ctx.notes.filter(note => !note.isRest);
+    if (!pitched.length || pitched.some(note => !moveNote(note)))
+        return; // nothing moves if one note would leave the piano
+    rewriteNotes(ctx, note => (note.isRest ? null : moveNote(note)));
+}
+// The arrow keys, in the Edit tab. Returns true when the key was used.
+function handleArrowKey(event) {
+    if (event.ctrlKey || event.metaKey)
+        return false;
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key))
+        return false;
+    const ctx = getEditContext();
+    if (!ctx)
+        return false;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        moveSelectedInTime(ctx, event.key === 'ArrowRight' ? gridDivision : -gridDivision);
+    }
+    else {
+        const step = event.altKey ? 'octave' : event.shiftKey ? 'degree' : 'semitone';
+        movePitchOfSelection(ctx, step, event.key === 'ArrowUp' ? 1 : -1);
+    }
+    return true;
+}

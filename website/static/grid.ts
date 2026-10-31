@@ -788,67 +788,70 @@ function pickCandidate(cands: NoteCandidate[], staffName: string, xPos: number, 
   return best;
 }
 
-function setupGridInteraction(): void {
-  for (const partName of Object.keys(containers)) {
-    const el = containers[partName];
+// Mouse handling on one track's notation (called for every track, including ones added later)
+function setupTrackGridInteraction(partName: string): void {
+  const el = containers[partName];
 
-    el.addEventListener('mousedown', (event: MouseEvent) => {
-      if (!gridViewOn || event.button !== 0) return;
+  el.addEventListener('mousedown', (event: MouseEvent) => {
+    if (!gridViewOn || event.button !== 0) return;
 
-      const staff = getActiveStaves()[partName];
-      const pt = localPoint(partName, event);
-      if (!staff || !pt) return;
+    const staff = getActiveStaves()[partName];
+    const pt = localPoint(partName, event);
+    if (!staff || !pt) return;
 
-      event.preventDefault();
+    event.preventDefault();
 
-      // A click on the notation outside the staff's vertical range clears this track's selection;
-      // clicking there again brings the cleared selection back
-      if (!inStaffBand(partName, pt.y)) { blankClick(partName); return; }
+    // A click on the notation outside the staff's vertical range clears this track's selection;
+    // clicking there again brings the cleared selection back
+    if (!inStaffBand(partName, pt.y)) { blankClick(partName); return; }
 
-      // 1. Grabbing a resize handle
-      const grab = handleHit(partName, pt.x);
-      if (grab) {
-        const store = selectionStore(staff, selections[currentLayer][partName]);
-        drag = {
-          kind: 'handle', partName, side: grab.side,
-          origStart: grab.range.start, origEnd: grab.range.end,
-          invalid: tupletSpans(store),
-        };
-        handlePreview = { partName, start: grab.range.start, end: grab.range.end };
-        document.body.style.cursor = 'ew-resize';
-        return;
-      }
-
-      // 2. Anywhere else: a click cycles the voice if it is inside the selection, otherwise it selects the
-      //    note nearest the press (all voices); moving the mouse turns either into a new drag selection
-      const sel = selections[currentLayer][partName];
-      const inside = !!sel && pt.x >= timeToX(partName, sel.start) && pt.x <= timeToX(partName, sel.end);
-
-      const total = totalLength();
-      const time = rawTimeFromX(partName, pt.x);
-      const pick = pickCandidate(candidatesAt(staff, Math.min(time, total - 1e-6), pt.y), partName, pt.x, pt.y);
-      let anchorBase: { start: number; end: number } | null = null;
-      let anchorRange: SelectionRange | null = null;
-      if (pick) {
-        const span = expandToTieGroup(pick.voice, pick.note, pick.start, pick.start + pick.dur);
-        anchorBase = { start: span.start, end: span.end };
-        anchorRange = makeSelection(staff, anchorBase, 'all');
-      }
-
+    // 1. Grabbing a resize handle
+    const grab = handleHit(partName, pt.x);
+    if (grab) {
+      const store = selectionStore(staff, selections[currentLayer][partName]);
       drag = {
-        kind: 'select', partName, anchorT: time, anchorRange, anchorBase, inside,
-        before: { ...selections[currentLayer] },
-        startClientX: event.clientX, startClientY: event.clientY, moved: false,
+        kind: 'handle', partName, side: grab.side,
+        origStart: grab.range.start, origEnd: grab.range.end,
+        invalid: tupletSpans(store),
       };
-    });
+      handlePreview = { partName, start: grab.range.start, end: grab.range.end };
+      document.body.style.cursor = 'ew-resize';
+      return;
+    }
 
-    // Resize cursor when hovering a handle
-    el.addEventListener('mousemove', (event: MouseEvent) => {
-      if (drag || !gridViewOn) return;
-      const pt = localPoint(partName, event);
-      el.style.cursor = pt && inStaffBand(partName, pt.y) && handleHit(partName, pt.x) ? 'ew-resize' : '';
-    });
-  }
+    // 2. Anywhere else: a click cycles the voice if it is inside the selection, otherwise it selects the
+    //    note nearest the press (all voices); moving the mouse turns either into a new drag selection
+    const sel = selections[currentLayer][partName];
+    const inside = !!sel && pt.x >= timeToX(partName, sel.start) && pt.x <= timeToX(partName, sel.end);
+
+    const total = totalLength();
+    const time = rawTimeFromX(partName, pt.x);
+    const pick = pickCandidate(candidatesAt(staff, Math.min(time, total - 1e-6), pt.y), partName, pt.x, pt.y);
+    let anchorBase: { start: number; end: number } | null = null;
+    let anchorRange: SelectionRange | null = null;
+    if (pick) {
+      const span = expandToTieGroup(pick.voice, pick.note, pick.start, pick.start + pick.dur);
+      anchorBase = { start: span.start, end: span.end };
+      anchorRange = makeSelection(staff, anchorBase, 'all');
+    }
+
+    drag = {
+      kind: 'select', partName, anchorT: time, anchorRange, anchorBase, inside,
+      before: { ...selections[currentLayer] },
+      startClientX: event.clientX, startClientY: event.clientY, moved: false,
+    };
+  });
+
+  // Resize cursor when hovering a handle
+  el.addEventListener('mousemove', (event: MouseEvent) => {
+    if (drag || !gridViewOn) return;
+    const pt = localPoint(partName, event);
+    el.style.cursor = pt && inStaffBand(partName, pt.y) && handleHit(partName, pt.x) ? 'ew-resize' : '';
+  });
+}
+
+function setupGridInteraction(): void {
+  Object.keys(containers).forEach(setupTrackGridInteraction);
 
   document.addEventListener('mousemove', (event: MouseEvent) => {
     const currentDrag = drag;

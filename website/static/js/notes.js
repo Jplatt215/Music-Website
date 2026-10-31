@@ -417,6 +417,7 @@ function updateMemory() {
         measureSigs: sigsForSave(),
         main: {},
         harmony: {},
+        trackOrder: [...staves],
     };
     for (const staffName of staves) {
         snapshot.main[staffName] = snapshotStaffNotes(mainStaves[staffName]);
@@ -447,10 +448,13 @@ function accessMemory(indexDifference) {
     const snapshot = globalMemory[newIdx];
     numMeasures = snapshot.numMeasures;
     measureSigs = sigsFromData(snapshot);
+    if (snapshot.trackOrder)
+        applyTrackOrder(snapshot.trackOrder); // undo also brings back added/deleted/moved tracks
     for (const staffName of staves) {
-        restoreStaffFromSnapshot(mainStaves[staffName], snapshot.main[staffName]);
-        restoreStaffFromSnapshot(harmonyStaves[staffName], snapshot.harmony[staffName]);
+        restoreStaffFromSnapshot(mainStaves[staffName], snapshot.main[staffName] ?? {});
+        restoreStaffFromSnapshot(harmonyStaves[staffName], snapshot.harmony[staffName] ?? {});
     }
+    renderGridOverlays(Object.values(getActiveStaves()));
     drawAllStaves();
 }
 // The longest note value that fits in `room` (a whole note is 1)

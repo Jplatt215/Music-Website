@@ -52,6 +52,7 @@ interface GlobalSnapshot {
   measureSigs: MeasureSig[];
   main: Record<string, StaffSnapshot>;
   harmony: Record<string, StaffSnapshot>;
+  trackOrder?: string[];             // the tracks, top to bottom
 }
 
 const globalMemory: GlobalSnapshot[] = [];
@@ -68,19 +69,21 @@ const staves: string[] = ["staff1", "staff2", "staff3", "staff4"];
 const output = document.getElementById("output") as HTMLElement;
 const template = document.getElementById("staffTemplate") as HTMLTemplateElement;
 
-const createStaffContainers = (staffNames: string[], activeStaff: string = "staff1"): void => {
-  staffNames.forEach(name => {
-    const clone = template.content.cloneNode(true) as DocumentFragment;
-    const settings = clone.querySelector(".staffSettings") as HTMLElement;
-    const container = clone.querySelector(".staffContainer") as HTMLElement;
+// Add one track's settings panel and staff container to the page (at the end, or before another element)
+const createStaffContainer = (name: string, before: Element | null = null): void => {
+  const clone = template.content.cloneNode(true) as DocumentFragment;
+  const settings = clone.querySelector(".staffSettings") as HTMLElement;
+  const container = clone.querySelector(".staffContainer") as HTMLElement;
 
-    settings.dataset.staff = name;
-    container.dataset.name = name;
-    container.id = `${name}Container`;
+  settings.dataset.staff = name;
+  container.dataset.name = name;
+  container.id = `${name}Container`;
 
-    output.appendChild(clone);
-    containers[name] = container;
-  });
+  output.insertBefore(clone, before);
+  containers[name] = container;
+};
+const createStaffContainers = (staffNames: string[]): void => {
+  staffNames.forEach(name => createStaffContainer(name));
 };
 const generatePhraseButton  = document.querySelector('.generatePhraseButton')  as HTMLButtonElement;
 const separateStaffButton   = document.querySelector('.separateStaffButton')   as HTMLButtonElement;
@@ -234,8 +237,15 @@ const defaultPitchRanges: Record<string, string[]> = {
   staff4: ["D3", "B5"],
 };
 
+const DEFAULT_TRACKS = ["staff1", "staff2", "staff3", "staff4"];
+
+// Added tracks have no entry in defaultPitchRanges, so they get a wide middle range
+function defaultPitchRange(name: string): string[] {
+  return defaultPitchRanges[name] ?? ["C3", "C6"];
+}
+
 function resetStaffToDefaults(staff: Staff, rhythmRange: number[]): void {
-  staff.pitchRange  = [...defaultPitchRanges[staff.name]];
+  staff.pitchRange  = [...defaultPitchRange(staff.name)];
   staff.rhythmRange = [...rhythmRange];
   staff.scale       = ["C", "Chromatic"];
   staff.harmonize   = false;

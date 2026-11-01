@@ -15,7 +15,13 @@ function remapAllSelections(map: (range: SelectionRange) => SelectionRange | nul
   }
 }
 
-let currentTab: 'create' | 'edit' = 'create';
+type TabName = 'create' | 'edit' | 'detail';
+let currentTab: TabName = 'create';
+
+// Edit and Detail select whole notes of one track; Create selects any range of any tracks
+function selectsWholeNotes(): boolean {
+  return currentTab !== 'create';
+}
 let gridViewOn = true;
 
 const selections: Record<'main' | 'harmony', Record<string, SelectionRange | null>> = {
@@ -33,7 +39,7 @@ function getSelection(staffName: string): SelectionRange | null {
 
 function setSelection(staffName: string, range: SelectionRange | null): void {
   if (!gridViewOn) return;
-  if (currentTab === 'edit' && range) {
+  if (selectsWholeNotes() && range) {
     for (const name of staves) {
       if (name !== staffName) selections[currentLayer][name] = null;
     }
@@ -76,7 +82,7 @@ function selectionCycle(staff: Staff, sel: SelectionRange): VoiceState[] {
 function makeSelection(staff: Staff, base: { start: number; end: number }, state: VoiceState): SelectionRange {
   let start = base.start;
   let end = base.end;
-  if (currentTab === 'edit') {
+  if (selectsWholeNotes()) {
     const voices = state === 'all' ? drawnVoicesIn(staff, base.start, base.end) : [getVoice(staff, state) ?? staff];
     for (const drawnVoice of voices) {
       const first = noteSpanAt(drawnVoice, base.start + 1e-6);
@@ -143,10 +149,10 @@ function collapseSelectionsForEdit(): void {
   }
 }
 
-function setCurrentTab(tab: 'create' | 'edit'): void {
+function setCurrentTab(tab: TabName): void {
   const previous = currentTab;
   currentTab = tab;
-  if (tab === 'edit' && previous !== 'edit') collapseSelectionsForEdit();
+  if (tab !== 'create' && previous === 'create') collapseSelectionsForEdit();
   renderGridOverlays(Object.values(getActiveStaves()));
 }
 
@@ -307,6 +313,7 @@ function renderGridOverlays(staffList: Staff[]): void {
       }
     }
     if (typeof scheduleEditRefresh === 'function') scheduleEditRefresh();
+    if (typeof scheduleDetailRefresh === 'function') scheduleDetailRefresh();
 
     // Selection highlight (or the live preview while a handle is being dragged)
     const preview = handlePreview && handlePreview.partName === staff.name ? handlePreview : null;
@@ -371,6 +378,8 @@ function renderGridOverlays(staffList: Staff[]): void {
     }
 
     svg.appendChild(group);
+    if (typeof drawDynamics === 'function') drawDynamics(staff, svg);
+    if (typeof drawTechniques === 'function') drawTechniques(staff, svg);
   }
   refreshSelectedNotes();
 }

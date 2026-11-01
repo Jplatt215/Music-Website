@@ -879,3 +879,20 @@ body:not(.gridView) .staffSettingsBlank { pointer-events: none; cursor: default;
 .staffContainer,
 .staffContainer svg text { user-select: none; -webkit-user-select: none; }
 .gridLabel { pointer-events: none; }
+
+.articulationBtn { 
+  font-size: 1.2em; 
+  min-width: 2.2em;
+  width: 3em;
+  padding-left: 0;
+  padding-right: 0;
+  text-align: center;
+}
+
+.clefSelect, .keySelect { font-size: 14px; height: 30px; }
+
+#detail-menu .row > * {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}

@@ -73,7 +73,7 @@ function randomPitchFromScale(staff, noteDuration, allowRest = true) {
     const pick = scalePitches[Math.floor(Math.random() * scalePitches.length)];
     return [pick.slice(0, -1), parseInt(pick.slice(-1), 10)];
 }
-function createNote(noteNames, noteOctaves, noteDuration) {
+function createNote(noteNames, noteOctaves, noteDuration, articulations = []) {
     let keys = [];
     let accidentals = [];
     let durationInfo = noteDuration;
@@ -92,8 +92,12 @@ function createNote(noteNames, noteOctaves, noteDuration) {
         accidentals = entries.map(entry => entry.acc);
     }
     const note = new StaveNote({ keys, duration: durationInfo });
+    note._pitchAcc = accidentals; // as written; what is drawn depends on the key signature
     accidentals.forEach((acc, index) => { if (acc !== '')
         note.addModifier(new Accidental(acc), index); });
+    // kept on the note so the drawing code can put each one on the right side of the stem
+    note._articulations = articulations.map(code => new Articulation(code));
+    note._articulations.forEach((articulation) => note.addModifier(articulation, 0));
     if (noteDuration.includes("d")) {
         note.dotted = true;
         Dot.buildAndAttach([note], { all: true });
@@ -292,16 +296,18 @@ function addNoteAcrossBarline(fill, source, note, noteDur) {
     fill.measure.push(...first);
     pieces.push(...first);
     finishMeasure(fill);
+    // the parts after the barline are the same note held on, so they carry no articulation of their own
+    const held = new UnprocessedNote([...source.noteName], [...source.octaves], source.duration, source.dotted, source.tiedToNext);
     while (overflow >= measureLength(fill) - 1e-9) {
         const len = measureLength(fill);
-        const wholeMeasure = fillDuration(len, source);
+        const wholeMeasure = fillDuration(len, held);
         stampSequence(wholeMeasure, measureStart(fill));
         pieces.push(...wholeMeasure);
         fill.staff.notes.push([...wholeMeasure]);
         overflow = round(overflow - len);
     }
     if (overflow > 1e-9) {
-        const tail = fillDuration(overflow, source);
+        const tail = fillDuration(overflow, held);
         stampSequence(tail, measureStart(fill));
         fill.measure.push(...tail);
         pieces.push(...tail);
@@ -391,6 +397,7 @@ function snapshotNotes(notes) {
         dotted: note.dotted,
         tupletInfo: note.tupletInfo ? { ...note.tupletInfo } : null,
         tiedToNext: note.tiedToNext,
+        articulations: [...note.articulations],
     }));
 }
 function notesFromSnapshot(snapshot) {
@@ -398,6 +405,7 @@ function notesFromSnapshot(snapshot) {
         const note = new UnprocessedNote([...sig.noteName], sig.octaves, sig.duration, sig.dotted, sig.tiedToNext);
         if (sig.tupletInfo)
             note.tupletInfo = { ...sig.tupletInfo };
+        note.articulations = [...(sig.articulations ?? [])];
         return note;
     });
 }
@@ -418,10 +426,18 @@ function updateMemory() {
         main: {},
         harmony: {},
         trackOrder: [...staves],
+        dynamics: { main: {}, harmony: {} },
+        techniques: { main: {}, harmony: {} },
+        clefs: copyTrackChanges(trackClefs),
+        keys: copyTrackChanges(trackKeys),
     };
     for (const staffName of staves) {
         snapshot.main[staffName] = snapshotStaffNotes(mainStaves[staffName]);
         snapshot.harmony[staffName] = snapshotStaffNotes(harmonyStaves[staffName]);
+        snapshot.dynamics.main[staffName] = mainStaves[staffName].dynamics.map(mark => ({ ...mark }));
+        snapshot.dynamics.harmony[staffName] = harmonyStaves[staffName].dynamics.map(mark => ({ ...mark }));
+        snapshot.techniques.main[staffName] = mainStaves[staffName].techniques.map(mark => ({ ...mark }));
+        snapshot.techniques.harmony[staffName] = harmonyStaves[staffName].techniques.map(mark => ({ ...mark }));
     }
     globalMemory.push(snapshot);
     globalMemoryIndex = globalMemory.length - 1;
@@ -450,9 +466,15 @@ function accessMemory(indexDifference) {
     measureSigs = sigsFromData(snapshot);
     if (snapshot.trackOrder)
         applyTrackOrder(snapshot.trackOrder); // undo also brings back added/deleted/moved tracks
+    trackClefs = copyTrackChanges(snapshot.clefs);
+    trackKeys = copyTrackChanges(snapshot.keys);
     for (const staffName of staves) {
         restoreStaffFromSnapshot(mainStaves[staffName], snapshot.main[staffName] ?? {});
         restoreStaffFromSnapshot(harmonyStaves[staffName], snapshot.harmony[staffName] ?? {});
+        mainStaves[staffName].dynamics = (snapshot.dynamics?.main[staffName] ?? []).map(mark => ({ ...mark }));
+        harmonyStaves[staffName].dynamics = (snapshot.dynamics?.harmony[staffName] ?? []).map(mark => ({ ...mark }));
+        mainStaves[staffName].techniques = (snapshot.techniques?.main[staffName] ?? []).map(mark => ({ ...mark }));
+        harmonyStaves[staffName].techniques = (snapshot.techniques?.harmony[staffName] ?? []).map(mark => ({ ...mark }));
     }
     renderGridOverlays(Object.values(getActiveStaves()));
     drawAllStaves();
@@ -480,6 +502,8 @@ function fillDurationAsUnprocessed(duration, source) {
     }
     if (pieces.length > 0)
         pieces[pieces.length - 1].tiedToNext = false;
+    if (pieces.length > 0 && !source.isRest)
+        pieces[0].articulations = [...source.articulations]; // only the first of a tied run carries them
     return pieces;
 }
 // How long a list of notes lasts (a tuplet counts once, on its last note)

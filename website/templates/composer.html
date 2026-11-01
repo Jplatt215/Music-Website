@@ -17,6 +17,7 @@
   <script src="{{ url_for('static', filename='js/grid.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/create.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/edit.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/detail.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/write.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/audio.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/export.js') }}" defer></script>
@@ -117,6 +118,7 @@
       <div class="tabs">
         <button class="tab-btn active" data-target="input-menu" id="createTabBtn">Create</button>
         <button class="tab-btn" data-target="edit-menu" id="editTabBtn">Edit</button>
+        <button class="tab-btn" data-target="detail-menu" id="detailTabBtn">Detail</button>
         <button class="tab-btn hidden" data-target="load-menu" id="loadTabBtn">Load</button>
         <button class="tab-btn hidden" data-target="export-menu" id="exportTabBtn">Export</button>
       </div>
@@ -209,9 +211,8 @@
       </div>
 
       <!-- Edit tab: placeholder for now -->
-      <div id="edit-menu" class="tab-content hidden">
-
-      </div>
+      <div id="edit-menu" class="tab-content hidden"></div>
+      <div id="detail-menu" class="tab-content hidden"></div>
 
       <!-- Load tab -->
 <div id="load-menu" class="tab-content hidden">

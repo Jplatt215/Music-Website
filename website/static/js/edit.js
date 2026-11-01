@@ -69,12 +69,19 @@ function keyWithDot(cell, wantDot) {
 // The notes that fill [start, end) the way cell `c` does: rests, or its pitch tied across the time
 function piecesFor(cell, start, end) {
     const length = round(end - start);
-    return cell.isRest ? fillDurationWithRests(length, start) : fillDurationAsUnprocessed(length, cell.notes[0]);
+    if (cell.isRest)
+        return fillDurationWithRests(length, start);
+    const pieces = fillDurationAsUnprocessed(length, cell.notes[0]);
+    if (start > cell.start + 1e-9)
+        pieces.forEach(piece => { piece.articulations = []; }); // the cut-off tail of a note is not a new attack
+    return pieces;
 }
 function noteWithDuration(template, key) {
-    return template.isRest
-        ? makeRest(key)
-        : new UnprocessedNote([...template.noteName], [...template.octaves], key, false, false);
+    if (template.isRest)
+        return makeRest(key);
+    const note = new UnprocessedNote([...template.noteName], [...template.octaves], key, false, false);
+    note.articulations = [...template.articulations];
+    return note;
 }
 // Overwrites [s, e) with `fresh`. Cells partly covered are cut; a tuplet may only be removed whole.
 function paint(cells, from, to, fresh) {
@@ -258,7 +265,7 @@ const ACC_BUTTONS = ['bb', 'b', '', '#', '##'];
 const OCTAVE_BUTTONS = [0, 1, 2, 3, 4, 5, 6, 7];
 const DURATION_KEYS = { 1: 'w', 0.5: 'h', 0.25: 'q', 0.125: '8', 0.0625: '16', 0.03125: '32' };
 function getEditContext() {
-    if (!gridViewOn || currentTab !== 'edit')
+    if (!gridViewOn || currentTab === 'create')
         return null;
     const active = getActiveStaves();
     for (const name of staves) {
@@ -708,6 +715,8 @@ function rewriteNotes(ctx, fn) {
                 : new UnprocessedNote(result.names, result.octaves, src.duration, src.dotted, src.tiedToNext);
             if (src.tupletInfo)
                 replacement.tupletInfo = { ...src.tupletInfo };
+            if (result !== 'rest')
+                replacement.articulations = [...src.articulations];
             notes[entry.index] = replacement;
             changed = true;
         }
@@ -1265,7 +1274,7 @@ function movePitchOfSelection(ctx, step, direction) {
 }
 // The arrow keys, in the Edit tab. Returns true when the key was used.
 function handleArrowKey(event) {
-    if (event.ctrlKey || event.metaKey)
+    if (event.ctrlKey || event.metaKey || currentTab !== 'edit')
         return false;
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key))
         return false;

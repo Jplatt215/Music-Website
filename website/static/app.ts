@@ -45,6 +45,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     const dest = (btn as HTMLElement).dataset.target;
     if (dest === 'input-menu') setCurrentTab('create');
     else if (dest === 'edit-menu') setCurrentTab('edit');
+    else if (dest === 'detail-menu') setCurrentTab('detail');
     else renderGridOverlays(Object.values(getActiveStaves()));
   });
 });
@@ -286,6 +287,8 @@ function removeTrack(name: string): void {
   delete mainStaves[name];
   delete harmonyStaves[name];
   delete gridLayout[name];
+  delete trackClefs[name];
+  delete trackKeys[name];
   delete clipboard[name];
   for (const layer of ['main', 'harmony'] as const) {
     delete selections[layer][name];
@@ -713,6 +716,8 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
 
 buildEditMenu();
 scheduleEditRefresh();
+buildDetailMenu();
+scheduleDetailRefresh();
 
 setupEntryInteraction();
 

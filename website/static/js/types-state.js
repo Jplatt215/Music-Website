@@ -1,7 +1,7 @@
 "use strict";
 const globalMemory = [];
 let globalMemoryIndex = -1;
-const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Formatter, Tuplet } = Vex.Flow;
+const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Articulation, Formatter, Tuplet } = Vex.Flow;
 // Notes carry their own stave when drawn, so VexFlow decides collisions per staff (see customStaveNoteFormat)
 const STAVENOTE_FORMAT_VEXFLOW = StaveNote.format;
 const containers = {};
@@ -100,6 +100,8 @@ class Staff {
         this.id = 'up1'; // a staff is its own Up 1 voice
         this.stems = 1;
         this.extraVoices = []; // Down 1, Up 2, Down 2 (only the ones that have notes, in that order)
+        this.dynamics = []; // pp, f, crescendo ... drawn under the staff
+        this.techniques = []; // pizz., con sord. ... drawn above the staff
         this.name = name;
         this.pitchRange = pitchRange;
         this.rhythmRange = rhythmRange;
@@ -133,6 +135,8 @@ function resetStaffToDefaults(staff, rhythmRange) {
     staff.harmonize = false;
     staff.muted = false;
     staff.extraVoices = [];
+    staff.dynamics = [];
+    staff.techniques = [];
     resetStaff(staff);
 }
 class UnprocessedNote {
@@ -145,10 +149,11 @@ class UnprocessedNote {
         this.isRest = this.noteName[0] === "Rest";
         this.tupletInfo = null;
         this.tiedToNext = tiedToNext;
+        this.articulations = [];
     }
     get octave() { return this.octaves[0]; }
     toStaveNote() {
-        return createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration);
+        return createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration, this.articulations);
     }
     setTuplet(id, totalTupletDuration, ratio, count, index) {
         this.tupletInfo = { id, totalTupletDuration, ratio, count, index };
@@ -231,6 +236,44 @@ const scalesMapping = {
     'Overtone (Theoretical)': [0, 2, 4, 6, 7, 9, 10, 11],
     'Overtone (Audible)': [0, 2, 4, 7, 11],
 };
+// Per track (shared by the main and harmony layers). A track with no entry has a treble clef and no key signature.
+let trackClefs = {};
+let trackKeys = {};
+// Sharps (+) or flats (-) in each key signature
+const KEY_ACCIDENTAL_COUNT = {
+    'C': 0, 'G': 1, 'D': 2, 'A': 3, 'E': 4, 'B': 5, 'F#': 6, 'C#': 7,
+    'F': -1, 'Bb': -2, 'Eb': -3, 'Ab': -4, 'Db': -5, 'Gb': -6, 'Cb': -7,
+};
+const SHARP_ORDER = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
+const FLAT_ORDER = ['B', 'E', 'A', 'D', 'G', 'C', 'F'];
+// The accidental each letter has in a key signature: G gives { F: '#' }
+function keyAccidentals(key) {
+    const count = KEY_ACCIDENTAL_COUNT[key] ?? 0;
+    const result = {};
+    const letters = count >= 0 ? SHARP_ORDER : FLAT_ORDER;
+    for (let index = 0; index < Math.abs(count); index++)
+        result[letters[index]] = count >= 0 ? '#' : 'b';
+    return result;
+}
+function trackValueAt(records, track, measure, fallback) {
+    let value = fallback;
+    for (const change of records[track] ?? [])
+        if (change.measure <= measure)
+            value = change.value;
+    return value;
+}
+function clefAt(track, measure) {
+    return trackValueAt(trackClefs, track, measure, 'treble');
+}
+function keyAt(track, measure) {
+    return trackValueAt(trackKeys, track, measure, 'C');
+}
+function copyTrackChanges(records) {
+    const copy = {};
+    for (const track of Object.keys(records ?? {}))
+        copy[track] = records[track].map(change => ({ ...change }));
+    return copy;
+}
 // Filled by processNotes, keyed by the VexFlow StaveNote object.
 const noteTiming = new WeakMap();
 // Rebuilt on every drawAllVoices(); only the active layer is ever drawn.

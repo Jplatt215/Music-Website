@@ -17,6 +17,7 @@ const currentCompositionTitle = document.getElementById('currentCompositionTitle
 const projectTitleBtn = document.getElementById('projectTitleBtn') as HTMLButtonElement;
 const createTabBtn = document.getElementById('createTabBtn') as HTMLButtonElement;
 const editTabBtn   = document.getElementById('editTabBtn')   as HTMLButtonElement;
+const detailTabBtn = document.getElementById('detailTabBtn') as HTMLButtonElement;
 const loadTabBtn   = document.getElementById('loadTabBtn')   as HTMLButtonElement;
 const exportTabBtn = document.getElementById('exportTabBtn') as HTMLButtonElement;
 let previousTabId: string = 'input-menu';
@@ -34,6 +35,7 @@ projectTitleBtn?.addEventListener('click', () => {
     exportTabBtn.classList.remove('active');
     createTabBtn.classList.remove('hidden');
     editTabBtn.classList.remove('hidden');
+    detailTabBtn.classList.remove('hidden');
     loadMenu.classList.add('hidden');
     exportMenu.classList.add('hidden');
     projectTitleBtn.classList.remove('active');
@@ -52,6 +54,7 @@ projectTitleBtn?.addEventListener('click', () => {
 
     createTabBtn.classList.add('hidden');
     editTabBtn.classList.add('hidden');
+    detailTabBtn.classList.add('hidden');
     loadTabBtn.classList.remove('hidden');
     exportTabBtn.classList.remove('hidden');
     loadTabBtn.classList.add('active');
@@ -110,6 +113,7 @@ function serializeNotes(notes: UnprocessedNote[]): object[] {
     dotted: note.dotted,
     tupletInfo: note.tupletInfo,
     tiedToNext: note.tiedToNext,
+    articulations: note.articulations,
   }));
 }
 
@@ -117,6 +121,7 @@ function savedNotesToUnprocessed(saved: any[]): UnprocessedNote[] {
   return (saved ?? []).map((savedNote: any) => {
     const note = new UnprocessedNote(savedNote.noteName, savedNote.octaves ?? savedNote.octave, savedNote.duration, savedNote.dotted, savedNote.tiedToNext ?? false);
     if (savedNote.tupletInfo) note.tupletInfo = { ...savedNote.tupletInfo };
+    note.articulations = [...(savedNote.articulations ?? [])];
     return note;
   });
 }
@@ -129,6 +134,8 @@ function serializeStaff(staff: Staff): object {
     scale: staff.scale,
     harmonize: staff.harmonize,
     muted: staff.muted,
+    dynamics: staff.dynamics.map(mark => ({ ...mark })),
+    techniques: staff.techniques.map(mark => ({ ...mark })),
     notes: serializeNotes(staff.unprocessedNotes),
     extraVoices: staff.extraVoices.map(voice => ({ id: voice.id, notes: serializeNotes(voice.unprocessedNotes) })),
   };
@@ -142,6 +149,8 @@ function restoreStaff(staff: Staff, saved: any): void {
   staff.scale       = saved.scale;
   staff.harmonize   = saved.harmonize ?? staff.harmonize;
   staff.muted       = saved.muted ?? false;
+  staff.dynamics    = (saved.dynamics ?? []).map((mark: DynamicMark) => ({ ...mark }));
+  staff.techniques  = (saved.techniques ?? []).map((mark: TechniqueMark) => ({ ...mark }));
 
   staff.extraVoices = [];
   resetStaff(staff);
@@ -164,7 +173,7 @@ function getCompositionData(): object {
     harmonyData[staffName] = serializeStaff(harmonyStaves[staffName]);
   }
 
-  return { timeSignature: [measureSigs[0].num, measureSigs[0].den], measureSigs: sigsForSave(), numMeasures, trackOrder: [...staves], main: mainData, harmony: harmonyData };
+  return { timeSignature: [measureSigs[0].num, measureSigs[0].den], measureSigs: sigsForSave(), numMeasures, trackOrder: [...staves], clefs: copyTrackChanges(trackClefs), keys: copyTrackChanges(trackKeys), main: mainData, harmony: harmonyData };
 }
 
 function loadCompositionData(data: any): void {
@@ -174,6 +183,8 @@ function loadCompositionData(data: any): void {
 
   // saves made before tracks could be added or moved have the four original tracks
   applyTrackOrder(Array.isArray(data.trackOrder) && data.trackOrder.length ? data.trackOrder : DEFAULT_TRACKS);
+  trackClefs = copyTrackChanges(data.clefs);
+  trackKeys = copyTrackChanges(data.keys);
 
   for (const staffName of staves) {
     restoreStaff(mainStaves[staffName], data.main[staffName]);
@@ -408,6 +419,8 @@ newCompositionButton?.addEventListener('click', () => {
   numMeasures = 1;
   measureSigs = [makeSig(4, 4)];
   applyTrackOrder(DEFAULT_TRACKS);
+  trackClefs = {};
+  trackKeys = {};
 
   for (const staffName of staves) {
     resetStaffToDefaults(mainStaves[staffName], [0.03125, 1]);
@@ -488,4 +501,4 @@ loadFromLocalStorage();
 const urlSlug = window.location.pathname.match(/\/compositions\/([^/]+)/)?.[1];
 if (urlSlug) {
   loadComposition(urlSlug, '');
-}
+}

@@ -82,13 +82,17 @@ function keyWithDot(cell: Cell, wantDot: boolean): string | null {
 // The notes that fill [start, end) the way cell `c` does: rests, or its pitch tied across the time
 function piecesFor(cell: Cell, start: number, end: number): UnprocessedNote[] {
   const length = round(end - start);
-  return cell.isRest ? fillDurationWithRests(length, start) : fillDurationAsUnprocessed(length, cell.notes[0]);
+  if (cell.isRest) return fillDurationWithRests(length, start);
+  const pieces = fillDurationAsUnprocessed(length, cell.notes[0]);
+  if (start > cell.start + 1e-9) pieces.forEach(piece => { piece.articulations = []; });   // the cut-off tail of a note is not a new attack
+  return pieces;
 }
 
 function noteWithDuration(template: UnprocessedNote, key: string): UnprocessedNote {
-  return template.isRest
-    ? makeRest(key)
-    : new UnprocessedNote([...template.noteName], [...template.octaves], key, false, false);
+  if (template.isRest) return makeRest(key);
+  const note = new UnprocessedNote([...template.noteName], [...template.octaves], key, false, false);
+  note.articulations = [...template.articulations];
+  return note;
 }
 
 // Overwrites [s, e) with `fresh`. Cells partly covered are cut; a tuplet may only be removed whole.
@@ -325,7 +329,7 @@ interface EditGroup {
 }
 
 function getEditContext(): EditCtx | null {
-  if (!gridViewOn || currentTab !== 'edit') return null;
+  if (!gridViewOn || currentTab === 'create') return null;
   const active = getActiveStaves();
   for (const name of staves) {
     const sel = getSelection(name);
@@ -777,6 +781,7 @@ function rewriteNotes(ctx: EditCtx, fn: (note: UnprocessedNote) => PitchSet | 'r
         ? makeRest(src.duration, src.dotted)
         : new UnprocessedNote(result.names, result.octaves, src.duration, src.dotted, src.tiedToNext);
       if (src.tupletInfo) replacement.tupletInfo = { ...src.tupletInfo };
+      if (result !== 'rest') replacement.articulations = [...src.articulations];
       notes[entry.index] = replacement;
       changed = true;
     }
@@ -1317,7 +1322,7 @@ function movePitchOfSelection(ctx: EditCtx, step: PitchStep, direction: 1 | -1):
 
 // The arrow keys, in the Edit tab. Returns true when the key was used.
 function handleArrowKey(event: KeyboardEvent): boolean {
-  if (event.ctrlKey || event.metaKey) return false;
+  if (event.ctrlKey || event.metaKey || currentTab !== 'edit') return false;
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return false;
   const ctx = getEditContext();
   if (!ctx) return false;

@@ -41,6 +41,7 @@ interface MemorySnapshot {
   dotted: boolean;
   tupletInfo: TupletInfo | null;
   tiedToNext: boolean;
+  articulations?: string[];
 }
 
 // One staff's notes in a snapshot: Up 1 always, plus any other voices the staff has (keyed by voice id)
@@ -53,12 +54,16 @@ interface GlobalSnapshot {
   main: Record<string, StaffSnapshot>;
   harmony: Record<string, StaffSnapshot>;
   trackOrder?: string[];             // the tracks, top to bottom
+  dynamics?: { main: Record<string, DynamicMark[]>; harmony: Record<string, DynamicMark[]> };
+  techniques?: { main: Record<string, TechniqueMark[]>; harmony: Record<string, TechniqueMark[]> };
+  clefs?: Record<string, TrackChange[]>;
+  keys?: Record<string, TrackChange[]>;
 }
 
 const globalMemory: GlobalSnapshot[] = [];
 let globalMemoryIndex: number = -1;
 
-const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Formatter, Tuplet } = Vex.Flow;
+const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Articulation, Formatter, Tuplet } = Vex.Flow;
 // Notes carry their own stave when drawn, so VexFlow decides collisions per staff (see customStaveNoteFormat)
 const STAVENOTE_FORMAT_VEXFLOW = (StaveNote as any).format;
 const containers: Record<string, HTMLElement> = {};
@@ -205,6 +210,8 @@ class Staff implements VoiceLike {
   tuplets: TupletObj[];
   toneNotes: [string[] | null, number][];
   muted: boolean;
+  dynamics: DynamicMark[] = [];       // pp, f, crescendo ... drawn under the staff
+  techniques: TechniqueMark[] = [];   // pizz., con sord. ... drawn above the staff
   duration: number;
   requiredWidth: number;
 
@@ -251,6 +258,8 @@ function resetStaffToDefaults(staff: Staff, rhythmRange: number[]): void {
   staff.harmonize   = false;
   staff.muted       = false;
   staff.extraVoices = [];
+  staff.dynamics = [];
+  staff.techniques = [];
   resetStaff(staff);
 }
 
@@ -262,6 +271,7 @@ class UnprocessedNote {
   isRest: boolean;
   tupletInfo: TupletInfo | null;
   tiedToNext: boolean;
+  articulations: string[];      // VexFlow codes ("a." staccato, "a>" accent, ...), on the first note of a tied chain
 
   constructor(noteName: string | string[], octave: number | number[], duration: string, dotted: boolean = false, tiedToNext: boolean = false) {
     this.noteName = Array.isArray(noteName) ? noteName : [noteName];
@@ -272,12 +282,13 @@ class UnprocessedNote {
     this.isRest = this.noteName[0] === "Rest";
     this.tupletInfo = null;
     this.tiedToNext = tiedToNext;
+    this.articulations = [];
   }
 
   get octave(): number { return this.octaves[0]; }
 
   toStaveNote(): any {
-    return createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration);
+    return createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration, this.articulations);
   }
 
   setTuplet(id: number, totalTupletDuration: number, ratio: [number, number], count: number, index: number): void {
@@ -394,7 +405,73 @@ interface MeasureLayout {
   xEnd: number;
   yTop: number;
   yBottom: number;
+  staffTop: number;           // y of the top staff line
+  staffBottom: number;        // y of the bottom staff line
   lines: GridLine[];
+}
+
+// A level (pp, f ...) sits at `start`; a hairpin covers start to end
+interface DynamicMark {
+  kind: 'level' | 'crescendo' | 'diminuendo';
+  level?: string;
+  start: number;
+  end: number;
+}
+
+// A playing technique written above the staff at `start`; a longer selection adds a dashed line to `end`
+interface TechniqueMark {
+  text: string;
+  start: number;
+  end: number;
+}
+
+// A clef or key signature that starts at a measure and holds until the track's next change
+interface TrackChange {
+  measure: number;
+  value: string;
+}
+
+type ClefName = 'treble' | 'bass' | 'alto' | 'tenor';
+
+// Per track (shared by the main and harmony layers). A track with no entry has a treble clef and no key signature.
+let trackClefs: Record<string, TrackChange[]> = {};
+let trackKeys: Record<string, TrackChange[]> = {};
+
+// Sharps (+) or flats (-) in each key signature
+const KEY_ACCIDENTAL_COUNT: Record<string, number> = {
+  'C': 0, 'G': 1, 'D': 2, 'A': 3, 'E': 4, 'B': 5, 'F#': 6, 'C#': 7,
+  'F': -1, 'Bb': -2, 'Eb': -3, 'Ab': -4, 'Db': -5, 'Gb': -6, 'Cb': -7,
+};
+const SHARP_ORDER = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
+const FLAT_ORDER = ['B', 'E', 'A', 'D', 'G', 'C', 'F'];
+
+// The accidental each letter has in a key signature: G gives { F: '#' }
+function keyAccidentals(key: string): Record<string, string> {
+  const count = KEY_ACCIDENTAL_COUNT[key] ?? 0;
+  const result: Record<string, string> = {};
+  const letters = count >= 0 ? SHARP_ORDER : FLAT_ORDER;
+  for (let index = 0; index < Math.abs(count); index++) result[letters[index]] = count >= 0 ? '#' : 'b';
+  return result;
+}
+
+function trackValueAt(records: Record<string, TrackChange[]>, track: string, measure: number, fallback: string): string {
+  let value = fallback;
+  for (const change of records[track] ?? []) if (change.measure <= measure) value = change.value;
+  return value;
+}
+
+function clefAt(track: string, measure: number): ClefName {
+  return trackValueAt(trackClefs, track, measure, 'treble') as ClefName;
+}
+
+function keyAt(track: string, measure: number): string {
+  return trackValueAt(trackKeys, track, measure, 'C');
+}
+
+function copyTrackChanges(records: Record<string, TrackChange[]> | undefined): Record<string, TrackChange[]> {
+  const copy: Record<string, TrackChange[]> = {};
+  for (const track of Object.keys(records ?? {})) copy[track] = records![track].map(change => ({ ...change }));
+  return copy;
 }
 
 interface PartLayout {

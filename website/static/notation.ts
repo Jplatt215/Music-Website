@@ -6,6 +6,16 @@
 // We keep its handling of rests (moving them up/down, hiding identical rests in two voices) but replace the
 // shifting of notes: a note moves aside ONLY if another note starting at the same moment is a second or less away.
 
+// Articulations sit on the note-head side of a note (opposite the stem); fermatas always go above
+function positionArticulations(vfNote: any): void {
+  const { Position } = Vex.Flow.Modifier;
+  const stemUp = !vfNote.isRest() && vfNote.getStemDirection() === 1;
+  for (const articulation of vfNote._articulations ?? []) {
+    const isFermata = articulation.type.startsWith('a@');
+    articulation.setPosition(stemUp && !isFermata ? Position.BELOW : Position.ABOVE);
+  }
+}
+
 function customStaveNoteFormat(notes: any[], state: any): boolean {
   const before = state.right_shift;
   const result = STAVENOTE_FORMAT_VEXFLOW(notes, state);   // rests: vertical moves, hiding identical rests
@@ -96,7 +106,72 @@ function getGlobalMeasureWidths(staffList: Staff[]): number[] {
   for (let itemIndex = globalWidths.length; itemIndex < numMeasures; itemIndex++) {
     globalWidths[itemIndex] = 400 + (sigShownAt(itemIndex) && itemIndex > 0 ? 25 : 0);
   }
+  for (let itemIndex = 0; itemIndex < globalWidths.length; itemIndex++) {
+    globalWidths[itemIndex] += Math.max(0, ...staffList.map(staff => measureHeaderExtra(staff.name, itemIndex)));
+  }
   return globalWidths;
+}
+
+const KEY_SIGNATURE_WIDTH = 13;      // room for each sharp, flat or natural of a key signature
+const CLEF_CHANGE_WIDTH = 24;
+
+// How much wider than usual a measure's start is because of a clef or key change on this track
+function measureHeaderExtra(track: string, measureIndex: number): number {
+  const key = keyAt(track, measureIndex);
+  if (measureIndex === 0) return Math.abs(KEY_ACCIDENTAL_COUNT[key] ?? 0) * KEY_SIGNATURE_WIDTH;
+
+  let extra = 0;
+  if (clefAt(track, measureIndex) !== clefAt(track, measureIndex - 1)) extra += CLEF_CHANGE_WIDTH;
+  const previousKey = keyAt(track, measureIndex - 1);
+  if (key !== previousKey) {
+    extra += (Math.abs(KEY_ACCIDENTAL_COUNT[key] ?? 0) + Math.abs(KEY_ACCIDENTAL_COUNT[previousKey] ?? 0)) * KEY_SIGNATURE_WIDTH + 6;
+  }
+  return extra;
+}
+
+// Clef, then key signature, then time signature; clefs and keys are only written where they change
+function addStaveHeader(stave: any, track: string, measureIndex: number): void {
+  const clef = clefAt(track, measureIndex);
+  const key = keyAt(track, measureIndex);
+  if (measureIndex === 0) {
+    stave.addClef(clef);
+    if (key !== 'C') stave.addKeySignature(key);
+  } else {
+    if (clef !== clefAt(track, measureIndex - 1)) stave.addClef(clef, 'small');
+    const previousKey = keyAt(track, measureIndex - 1);
+    if (key !== previousKey) stave.addKeySignature(key, previousKey);
+  }
+  if (sigShownAt(measureIndex)) stave.addTimeSignature(`${sigOf(measureIndex).num}/${sigOf(measureIndex).den}`);
+}
+
+// A rest sits on the middle line in every clef; this is the key that puts it there
+const REST_KEY_FOR_CLEF: Record<string, string> = { treble: 'B/4', bass: 'D/3', alto: 'C/4', tenor: 'A/3' };
+
+// Notes are made for the treble clef; this moves one to where the clef of its measure puts it
+function retargetClef(note: any, clef: string, pickStem: boolean): void {
+  if ((note._clef ?? 'treble') === clef) return;
+  note.clef = clef;
+  if (note.isRest()) note.keys = [REST_KEY_FOR_CLEF[clef]];
+  note.keyProps = [];
+  note.sortedKeyProps = [];
+  note.displaced = false;
+  note.calculateKeyProps();
+  note.reset();
+  if (pickStem && !note.isRest()) note.autoStem();
+  note._clef = clef;
+}
+
+// Draws each accidental as the key signature needs it: none for a note the key already has, a natural for one it changes
+function applyKeyAccidentals(note: any, key: string): void {
+  if (note.isRest() || !note._pitchAcc || (note._keyName ?? 'C') === key) return;
+  const inKey = keyAccidentals(key);
+  note.modifiers = note.modifiers.filter((modifier: any) => modifier.getCategory() !== 'Accidental');
+  note._pitchAcc.forEach((acc: string, index: number) => {
+    const letter = note.keys[index].charAt(0).toUpperCase();
+    if (acc !== (inKey[letter] ?? '')) note.addModifier(new Accidental(acc === '' ? 'n' : acc), index);
+  });
+  note._keyName = key;
+  note._preFormatted = false;
 }
 
 function getTupletsForMeasure(staff: NoteStore, measureIndex: number): any[] {
@@ -166,10 +241,17 @@ function drawAllStaves(includeHarmony: boolean = false): void {
 
     staffList.forEach(staff => {
       const stave = new Stave(staffLength, 60, staveWidth);
-      if (measureIndex === 0) stave.addClef("treble");
-      if (sigShownAt(measureIndex)) stave.addTimeSignature(`${sigOf(measureIndex).num}/${sigOf(measureIndex).den}`);
-      stave.setContext(contexts[staff.name]).draw();
+      addStaveHeader(stave, staff.name, measureIndex);
       vfStaves[staff.name] = stave;
+    });
+    // tracks with a clef or key change here have a wider header: every track starts its notes at the widest one
+    const noteStartX = Math.max(...staffList.map(staff => vfStaves[staff.name].getNoteStartX()));
+    staffList.forEach(staff => vfStaves[staff.name].setNoteStartX(noteStartX).setContext(contexts[staff.name]).draw());
+
+    staffList.forEach(staff => {
+      const stave = vfStaves[staff.name];
+      const clef = clefAt(staff.name, measureIndex);
+      const key = keyAt(staff.name, measureIndex);
 
       const shown = staffVoices(staff).filter(voice => voiceShownInBar(voice, measureIndex));
       const several = shown.length > 1;   // one voice: stems stay as they are. Several: each voice's stems are fixed
@@ -178,6 +260,8 @@ function drawAllStaves(includeHarmony: boolean = false): void {
       shown.forEach(voice => {
         const notes = voice.notes[measureIndex] || [];
         notes.forEach((note: any) => {
+          retargetClef(note, clef, !several);
+          applyKeyAccidentals(note, key);
           note.setStave(stave);                                   // attach every note to its own staff: collisions are then decided per staff
           note._stems = several ? voice.stems : undefined;
           if (several && !note.isRest() && note.getStemDirection() !== voice.stems) note.setStemDirection(voice.stems);
@@ -197,6 +281,8 @@ function drawAllStaves(includeHarmony: boolean = false): void {
         drawnNotes[staff.name].push(...notes);
       });
     });
+
+    items.forEach(item => item.notes.forEach(positionArticulations));   // after the stems are final, before formatting
 
     const nonEmptyItems = items.filter(it => it.vf.getTickables().length > 0);
     if (nonEmptyItems.length > 0) {
@@ -721,10 +807,8 @@ function captureMeasureLayout(staff: Staff, measureIndex: number, stave: any, no
   const endTime   = measureStartOf(measureIndex + 1);
   const xStart    = stave.getX();
   const xEnd      = stave.getX() + stave.getWidth();
-  let yTop        = stave.getYForLine(0) - 45;
-  let yBottom     = stave.getYForLine(4) + 45;
-
-
+  const yTop      = stave.getYForLine(0) - 45;
+  const yBottom   = stave.getYForLine(4) + 45;
 
   const lines: GridLine[] = [
     { t: startTime, x: xStart, kind: 'bar' },
@@ -776,5 +860,5 @@ function captureMeasureLayout(staff: Staff, measureIndex: number, stave: any, no
     });
   }
 
-  layout.measures.push({ index: measureIndex, startTime, endTime, xStart, xEnd, yTop, yBottom, lines });
+  layout.measures.push({ index: measureIndex, startTime, endTime, xStart, xEnd, yTop, yBottom, staffTop: stave.getYForLine(0), staffBottom: stave.getYForLine(4), lines });
 }

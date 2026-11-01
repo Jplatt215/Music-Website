@@ -16,6 +16,10 @@ function remapAllSelections(map) {
     }
 }
 let currentTab = 'create';
+// Edit and Detail select whole notes of one track; Create selects any range of any tracks
+function selectsWholeNotes() {
+    return currentTab !== 'create';
+}
 let gridViewOn = true;
 const selections = {
     main: {},
@@ -31,7 +35,7 @@ function getSelection(staffName) {
 function setSelection(staffName, range) {
     if (!gridViewOn)
         return;
-    if (currentTab === 'edit' && range) {
+    if (selectsWholeNotes() && range) {
         for (const name of staves) {
             if (name !== staffName)
                 selections[currentLayer][name] = null;
@@ -72,7 +76,7 @@ function selectionCycle(staff, sel) {
 function makeSelection(staff, base, state) {
     let start = base.start;
     let end = base.end;
-    if (currentTab === 'edit') {
+    if (selectsWholeNotes()) {
         const voices = state === 'all' ? drawnVoicesIn(staff, base.start, base.end) : [getVoice(staff, state) ?? staff];
         for (const drawnVoice of voices) {
             const first = noteSpanAt(drawnVoice, base.start + 1e-6);
@@ -143,7 +147,7 @@ function collapseSelectionsForEdit() {
 function setCurrentTab(tab) {
     const previous = currentTab;
     currentTab = tab;
-    if (tab === 'edit' && previous !== 'edit')
+    if (tab !== 'create' && previous === 'create')
         collapseSelectionsForEdit();
     renderGridOverlays(Object.values(getActiveStaves()));
 }
@@ -310,6 +314,8 @@ function renderGridOverlays(staffList) {
         }
         if (typeof scheduleEditRefresh === 'function')
             scheduleEditRefresh();
+        if (typeof scheduleDetailRefresh === 'function')
+            scheduleDetailRefresh();
         // Selection highlight (or the live preview while a handle is being dragged)
         const preview = handlePreview && handlePreview.partName === staff.name ? handlePreview : null;
         const realSel = selections[currentLayer][staff.name];
@@ -372,6 +378,10 @@ function renderGridOverlays(staffList) {
             }
         }
         svg.appendChild(group);
+        if (typeof drawDynamics === 'function')
+            drawDynamics(staff, svg);
+        if (typeof drawTechniques === 'function')
+            drawTechniques(staff, svg);
     }
     refreshSelectedNotes();
 }

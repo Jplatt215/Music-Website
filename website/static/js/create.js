@@ -422,6 +422,7 @@ function transposeNotes(notes, staff, scaleDegreeDifference) {
             else if (newIdx > maxIdx)
                 newOctave -= Math.ceil((newIdx - maxIdx) / 12);
             transposedNote = new UnprocessedNote(transposedPitch, newOctave, getDurationString(note));
+            transposedNote.articulations = [...note.articulations];
         }
         if (note.tupletInfo)
             transposedNote.tupletInfo = { ...note.tupletInfo };

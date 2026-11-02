@@ -662,7 +662,14 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
   const typing = (targetElement.tagName === 'INPUT' && (targetElement as HTMLInputElement).type !== 'range') ||
     targetElement.tagName === 'SELECT' || targetElement.tagName === 'TEXTAREA' || targetElement.isContentEditable;
   if (typing) return;
-  for (const staffName of staves) clearSelection(staffName);
+  // Esc clears the selection; with nothing selected it selects every track from start to end
+  if (staves.some(staffName => getSelection(staffName))) {
+    for (const staffName of staves) clearSelection(staffName);
+  } else {
+    const whole: Record<string, SelectionRange> = {};
+    for (const staffName of staves) whole[staffName] = { start: 0, end: totalLength(), voice: 'all', base: { start: 0, end: totalLength() } };
+    setSelectionsBulk(whole, staves[0]);
+  }
 });
 
 document.addEventListener('keydown', (event: KeyboardEvent) => {

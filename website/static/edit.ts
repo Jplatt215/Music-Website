@@ -1515,20 +1515,33 @@ function movePitchOfSelection(ctx: EditCtx, step: PitchStep, direction: 1 | -1):
   rewriteNotes(ctx, note => (note.isRest ? null : moveNote(note)));
 }
 
-// The arrow keys, in the Edit tab. Returns true when the key was used.
+// The arrow keys, in the Create, Edit and Detail tabs. Returns true when the key was used.
 function handleArrowKey(event: KeyboardEvent): boolean {
-  if (event.ctrlKey || event.metaKey || currentTab !== 'edit') return false;
+  if (event.ctrlKey || event.metaKey || !['create', 'edit', 'detail'].includes(currentTab)) return false;
   if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return false;
-  const ctx = getEditContext();
-  if (!ctx) return false;
 
-  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-    moveSelectedInTime(ctx, event.key === 'ArrowRight' ? gridDivision : -gridDivision);
-  } else {
-    const step: PitchStep = event.altKey ? 'octave' : event.shiftKey ? 'degree' : 'semitone';
-    movePitchOfSelection(ctx, step, event.key === 'ArrowUp' ? 1 : -1);
+  // every track with a selection moves, as one undo step
+  const names = staves.filter(name => getSelection(name));
+  const memoryBefore = globalMemoryIndex;
+  let used = false;
+  for (const name of names) {
+    const ctx = getEditContext(true, name);
+    if (!ctx) continue;
+    used = true;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      moveSelectedInTime(ctx, event.key === 'ArrowRight' ? gridDivision : -gridDivision);
+    } else {
+      const step: PitchStep = event.altKey ? 'octave' : event.shiftKey ? 'degree' : 'semitone';
+      movePitchOfSelection(ctx, step, event.key === 'ArrowUp' ? 1 : -1);
+    }
   }
-  return true;
+  if (globalMemoryIndex > memoryBefore + 1) {
+    const last = globalMemory[globalMemoryIndex];
+    globalMemory.splice(memoryBefore + 1);
+    globalMemory.push(last);
+    globalMemoryIndex = globalMemory.length - 1;
+  }
+  return used;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -52,11 +52,7 @@ function getAllowedPitches(staff, noteDuration) {
 function getNoteDurationInSeconds(staff, note) {
     const bpm = parseFloat(bpmSlider.value) || 120;
     const quarterNoteSeconds = 60 / bpm;
-    let durationInWholeNotes = getNoteDuration(note);
-    if (note.tupletInfo) {
-        const { ratio } = note.tupletInfo;
-        durationInWholeNotes = durationInWholeNotes * ratio[1] / ratio[0];
-    }
+    const durationInWholeNotes = getRealDuration(note);
     return durationInWholeNotes * 4 * quarterNoteSeconds;
 }
 function checkNoteInScale(note, staff) {
@@ -127,8 +123,7 @@ function sanitizeTies(notes) {
         if (!note.tiedToNext)
             continue;
         const next = notes[index + 1];
-        const valid = !!next && !note.isRest && !next.isRest && !note.tupletInfo && !next.tupletInfo &&
-            samePitches(note, next);
+        const valid = !!next && !note.isRest && !next.isRest && samePitches(note, next);
         if (!valid)
             note.tiedToNext = false;
     }
@@ -256,30 +251,75 @@ function measureLength(fill) {
 function measureStart(fill) {
     return measureStartOf(fill.staff.notes.length);
 }
+// Makes the VexFlow brackets for the pieces collected so far
+function flushTupletParts(fill) {
+    for (const [id, part] of [...fill.tupletParts.entries()]) {
+        if (part.notes.length > 0) {
+            const vfTuplet = new Tuplet(part.notes, { num_notes: part.ratio[0], notes_occupied: part.ratio[1], ratioed: !part.continued });
+            if (part.continued) {
+                vfTuplet.numerator_glyphs = [];
+                vfTuplet.denom_glyphs = [];
+            } // only the first bracket shows the ratio
+            fill.staff.tuplets.push({ tupletNotes: [...part.notes], vfTuplet, realDuration: part.total });
+            part.notes = [];
+            part.continued = true;
+        }
+        if (part.ended)
+            fill.tupletParts.delete(id);
+    }
+}
 // Close the measure being filled and start the next one
 function finishMeasure(fill, carry = 0) {
+    flushTupletParts(fill);
     if (fill.measure.length > 0)
         fill.staff.notes.push([...fill.measure]);
     fill.measure = [];
     fill.pos = carry;
 }
 function addTupletNote(fill, source, note) {
-    const { id, totalTupletDuration, ratio, count, index } = source.tupletInfo;
+    const outer = source.tupletInfo;
     const staff = fill.staff;
-    if (index === 1)
+    const real = getRealDuration(source);
+    if (outer.index === 1) {
         fill.tupletStart = round(measureStart(fill) + fill.pos);
-    const perNote = totalTupletDuration / count;
-    noteTiming.set(note, { start: round(fill.tupletStart + (index - 1) * perNote), dur: perNote, tupletId: id });
-    fill.tuplet.push(note);
+        fill.tupletOffset = 0;
+    }
+    const start = round(fill.tupletStart + fill.tupletOffset);
+    // a tuplet may run on into the next measure: carry on there
+    while (start >= round(measureStart(fill) + measureLength(fill)) - 1e-9)
+        finishMeasure(fill);
+    fill.pos = round(start - measureStart(fill));
+    // a tuplet note may be tied to the note before or after it, inside or outside the tuplet
+    if (source.tiedToNext && !source.isRest) {
+        fill.tie.push(note);
+    }
+    else if (fill.tie.length > 0 && !source.isRest) {
+        fill.tie.push(note);
+        staff.ties.push([...fill.tie]);
+        fill.tie = [];
+    }
+    else {
+        fill.tie = [];
+    }
+    noteTiming.set(note, { start, dur: real, tupletId: outer.id });
     fill.measure.push(note);
-    staff.toneNotes.push([toneNamesFor(source), getNoteDuration(source) * ratio[1] / ratio[0]]);
-    fill.tieHead = -1;
-    if (index !== count)
-        return;
-    const vfTuplet = new Tuplet(fill.tuplet, { num_notes: ratio[0], notes_occupied: ratio[1], ratioed: true });
-    staff.tuplets.push({ tupletNotes: [...fill.tuplet], vfTuplet, realDuration: totalTupletDuration });
-    fill.pos = round(fill.pos + totalTupletDuration);
-    fill.tuplet = [];
+    addSoundingNote(fill, source, real);
+    for (const level of tupletLevels(source)) {
+        let part = fill.tupletParts.get(level.id);
+        if (!part) {
+            part = { notes: [], ratio: level.ratio, continued: false, ended: false, total: level.totalTupletDuration };
+            fill.tupletParts.set(level.id, part);
+        }
+        part.notes.push(note);
+        if (level.index === level.count)
+            part.ended = true;
+    }
+    fill.tupletOffset += real;
+    fill.pos = round(start + real - measureStart(fill));
+    if (outer.index === outer.count) {
+        flushTupletParts(fill);
+        fill.pos = round(fill.tupletStart + fill.tupletOffset - measureStart(fill));
+    }
     if (fill.pos >= measureLength(fill) - 1e-9) {
         const len = measureLength(fill);
         finishMeasure(fill, round(Math.max(0, fill.pos - len)));
@@ -293,6 +333,8 @@ function addNoteAcrossBarline(fill, source, note, noteDur) {
     fill.tie = [];
     const first = fillDuration(room, source);
     stampSequence(first, round(measureStart(fill) + fill.pos));
+    if (first.length)
+        first[0]._graces = source.graceNotes;
     fill.measure.push(...first);
     pieces.push(...first);
     finishMeasure(fill);
@@ -341,10 +383,32 @@ function addNoteInMeasure(fill, source, note, noteDur) {
 // A note tied from the one before only lengthens it; it is not played again
 function addSoundingNote(fill, source, noteDur) {
     const toneNotes = fill.staff.toneNotes;
-    if (fill.tieHead >= 0)
+    if (fill.tieHead >= 0) {
         toneNotes[fill.tieHead][1] = round(toneNotes[fill.tieHead][1] + noteDur);
-    else
-        toneNotes.push([toneNamesFor(source), noteDur]);
+    }
+    else {
+        let mainDur = noteDur;
+        if (source.graceNotes.length && !source.isRest) {
+            // grace notes take their time from the note before (a slashed one, played before the beat) or from the note itself
+            const slashed = source.graceNotes.every(grace => grace.slash);
+            const lengths = source.graceNotes.map(grace => Math.min(durationMapping[grace.duration] ?? 0.0625, slashed ? 0.03125 : 0.125));
+            const previous = toneNotes[toneNotes.length - 1];
+            const fromPrevious = slashed && previous !== undefined;
+            const room = fromPrevious ? previous[1] : noteDur;
+            const total = Math.min(lengths.reduce((sum, length) => sum + length, 0), room / 2);
+            const scale = total / lengths.reduce((sum, length) => sum + length, 0);
+            if (fromPrevious)
+                previous[1] = round(previous[1] - total);
+            else
+                mainDur = round(noteDur - total);
+            source.graceNotes.forEach((grace, index) => {
+                toneNotes.push([grace.noteName.map((name, pitchIndex) => toToneName(name, grace.octaves[pitchIndex])), round(lengths[index] * scale)]);
+            });
+            if (fromPrevious)
+                mainDur = noteDur;
+        }
+        toneNotes.push([toneNamesFor(source), mainDur]);
+    }
     if (source.tiedToNext && !source.isRest) {
         if (fill.tieHead < 0)
             fill.tieHead = toneNotes.length - 1;
@@ -356,7 +420,8 @@ function addSoundingNote(fill, source, noteDur) {
 // Turn the notes into VexFlow notes, one array per measure, with their ties, tuplets and playback notes
 function processNotes(staff, unprocessedNotes) {
     sanitizeTies(unprocessedNotes);
-    const fill = { staff, measure: [], pos: 0, tuplet: [], tupletStart: 0, tie: [], tieHead: -1 };
+    refreshTupletTotals(unprocessedNotes);
+    const fill = { staff, measure: [], pos: 0, tupletStart: 0, tupletOffset: 0, tupletParts: new Map(), tie: [], tieHead: -1 };
     for (const source of unprocessedNotes) {
         // move on to the next measure if this one is already full
         while (fill.pos >= measureLength(fill) - 1e-9) {
@@ -395,17 +460,21 @@ function snapshotNotes(notes) {
         octaves: [...note.octaves],
         duration: note.duration,
         dotted: note.dotted,
-        tupletInfo: note.tupletInfo ? { ...note.tupletInfo } : null,
+        tupletInfo: note.tupletInfo ? { ...note.tupletInfo, ratio: [...note.tupletInfo.ratio] } : null,
+        innerTuplets: note.innerTuplets.map(level => ({ ...level, ratio: [...level.ratio] })),
         tiedToNext: note.tiedToNext,
         articulations: [...note.articulations],
+        graceNotes: copyGraceNotes(note.graceNotes),
     }));
 }
 function notesFromSnapshot(snapshot) {
     return snapshot.map(sig => {
         const note = new UnprocessedNote([...sig.noteName], sig.octaves, sig.duration, sig.dotted, sig.tiedToNext);
         if (sig.tupletInfo)
-            note.tupletInfo = { ...sig.tupletInfo };
+            note.tupletInfo = { ...sig.tupletInfo, ratio: [...sig.tupletInfo.ratio] };
+        note.innerTuplets = (sig.innerTuplets ?? []).map(level => ({ ...level, ratio: [...level.ratio] }));
         note.articulations = [...(sig.articulations ?? [])];
+        note.graceNotes = copyGraceNotes(sig.graceNotes);
         return note;
     });
 }
@@ -428,6 +497,8 @@ function updateMemory() {
         trackOrder: [...staves],
         dynamics: { main: {}, harmony: {} },
         techniques: { main: {}, harmony: {} },
+        slurs: { main: {}, harmony: {} },
+        glissandos: { main: {}, harmony: {} },
         clefs: copyTrackChanges(trackClefs),
         keys: copyTrackChanges(trackKeys),
     };
@@ -438,6 +509,10 @@ function updateMemory() {
         snapshot.dynamics.harmony[staffName] = harmonyStaves[staffName].dynamics.map(mark => ({ ...mark }));
         snapshot.techniques.main[staffName] = mainStaves[staffName].techniques.map(mark => ({ ...mark }));
         snapshot.techniques.harmony[staffName] = harmonyStaves[staffName].techniques.map(mark => ({ ...mark }));
+        snapshot.slurs.main[staffName] = mainStaves[staffName].slurs.map(mark => ({ ...mark }));
+        snapshot.slurs.harmony[staffName] = harmonyStaves[staffName].slurs.map(mark => ({ ...mark }));
+        snapshot.glissandos.main[staffName] = mainStaves[staffName].glissandos.map(mark => ({ ...mark }));
+        snapshot.glissandos.harmony[staffName] = harmonyStaves[staffName].glissandos.map(mark => ({ ...mark }));
     }
     globalMemory.push(snapshot);
     globalMemoryIndex = globalMemory.length - 1;
@@ -475,6 +550,10 @@ function accessMemory(indexDifference) {
         harmonyStaves[staffName].dynamics = (snapshot.dynamics?.harmony[staffName] ?? []).map(mark => ({ ...mark }));
         mainStaves[staffName].techniques = (snapshot.techniques?.main[staffName] ?? []).map(mark => ({ ...mark }));
         harmonyStaves[staffName].techniques = (snapshot.techniques?.harmony[staffName] ?? []).map(mark => ({ ...mark }));
+        mainStaves[staffName].slurs = (snapshot.slurs?.main[staffName] ?? []).map(mark => ({ ...mark }));
+        harmonyStaves[staffName].slurs = (snapshot.slurs?.harmony[staffName] ?? []).map(mark => ({ ...mark }));
+        mainStaves[staffName].glissandos = (snapshot.glissandos?.main[staffName] ?? []).map(mark => ({ ...mark }));
+        harmonyStaves[staffName].glissandos = (snapshot.glissandos?.harmony[staffName] ?? []).map(mark => ({ ...mark }));
     }
     renderGridOverlays(Object.values(getActiveStaves()));
     drawAllStaves();
@@ -509,11 +588,17 @@ function fillDurationAsUnprocessed(duration, source) {
 // How long a list of notes lasts (a tuplet counts once, on its last note)
 function notesDuration(notes) {
     let total = 0;
+    let groupSum = 0;
     for (const note of notes) {
-        if (!note.tupletInfo)
+        if (!note.tupletInfo) {
             total += getNoteDuration(note);
-        else if (note.tupletInfo.index === note.tupletInfo.count)
-            total += note.tupletInfo.totalTupletDuration;
+            continue;
+        }
+        groupSum += getRealDuration(note);
+        if (note.tupletInfo.index === note.tupletInfo.count) {
+            total = round(total + groupSum);
+            groupSum = 0;
+        }
     }
     return round(total);
 }
@@ -529,15 +614,19 @@ function getUnprocessedTimeline(notes) {
     const timeline = [];
     let time = 0;
     let tupletStart = 0;
+    let tupletOffset = 0;
     notes.forEach((note, index) => {
         if (note.tupletInfo) {
-            const { totalTupletDuration, count, index: tIndex, id } = note.tupletInfo;
-            if (tIndex === 1)
+            const { count, index: memberIndex, id } = note.tupletInfo;
+            if (memberIndex === 1) {
                 tupletStart = time;
-            const perNote = totalTupletDuration / count;
-            timeline.push({ start: round(tupletStart + (tIndex - 1) * perNote), dur: perNote, tupletId: id, index });
-            if (tIndex === count)
-                time = round(tupletStart + totalTupletDuration);
+                tupletOffset = 0;
+            }
+            const real = getRealDuration(note);
+            timeline.push({ start: round(tupletStart + tupletOffset), dur: real, tupletId: id, index });
+            tupletOffset += real;
+            if (memberIndex === count)
+                time = round(tupletStart + tupletOffset);
         }
         else {
             const dur = getNoteDuration(note);
@@ -550,40 +639,89 @@ function getUnprocessedTimeline(notes) {
 function cloneNotes(notes) {
     return notes.map(note => {
         const copy = new UnprocessedNote([...note.noteName], [...note.octaves], note.duration, note.dotted, note.tiedToNext);
-        if (note.tupletInfo)
-            copy.tupletInfo = { ...note.tupletInfo };
+        copyTuplets(note, copy);
+        copy.articulations = [...note.articulations];
+        copy.graceNotes = copyGraceNotes(note.graceNotes);
         return copy;
     });
 }
+function copyGraceNotes(graces) {
+    return (graces ?? []).map(grace => ({ noteName: [...grace.noteName], octaves: [...grace.octaves], duration: grace.duration, slash: grace.slash }));
+}
+// Gives every tuplet a number of its own (inner ones too), in order, and brings each one's total up to date
 function renumberTuplets(notes) {
-    let id = 0;
+    let counter = 0;
+    const currentIds = []; // the id in use at each depth
     for (const note of notes) {
-        if (!note.tupletInfo)
+        const levels = tupletLevels(note);
+        if (!levels.length) {
+            currentIds.length = 0;
             continue;
-        if (note.tupletInfo.index === 1)
-            id++;
-        note.tupletInfo = { ...note.tupletInfo, id };
+        }
+        levels.forEach((level, depth) => {
+            if (level.index === 1 || currentIds[depth] === undefined)
+                currentIds[depth] = ++counter;
+            level.id = currentIds[depth];
+        });
+        currentIds.length = levels.length;
+    }
+    refreshTupletTotals(notes);
+}
+// Each tuplet's total is the real length of its notes, so editing one note's value changes it
+function refreshTupletTotals(notes) {
+    const open = [];
+    for (const note of notes) {
+        const levels = tupletLevels(note);
+        levels.forEach((level, depth) => {
+            if (level.index === 1 || !open[depth])
+                open[depth] = { level, members: [], sum: 0 };
+            open[depth].members.push(level);
+            open[depth].sum += getRealDuration(note);
+            if (level.index === level.count) {
+                for (const member of open[depth].members)
+                    member.totalTupletDuration = round(open[depth].sum);
+                delete open[depth];
+            }
+        });
     }
 }
-// True if any tuplet starting inside [rangeStart, rangeEnd) crosses a barline.
-function tupletCrossesBarline(notes, rangeStart, rangeEnd) {
-    const timeline = getUnprocessedTimeline(notes);
+// Is `time` strictly inside one of these notes' tuplets? (Cutting there would split the tuplet.)
+function insideTupletSpanOf(notes, time) {
     let groupStart = 0;
-    for (const piece of timeline) {
+    for (const piece of getUnprocessedTimeline(notes)) {
         const info = notes[piece.index].tupletInfo;
         if (!info)
             continue;
         if (info.index === 1)
             groupStart = piece.start;
-        if (info.index === info.count) {
-            if (groupStart < rangeStart - 1e-9 || groupStart >= rangeEnd - 1e-9)
-                continue;
-            const end = round(piece.start + piece.dur);
-            const startMeasure = measureIndexAt(groupStart);
-            const endMeasure = measureIndexAt(round(end - 1e-6));
-            if (startMeasure !== endMeasure)
-                return true;
+        if (info.index === info.count && time > groupStart + 1e-9 && time < round(piece.start + piece.dur) - 1e-9)
+            return true;
+    }
+    return false;
+}
+// Does any voice of any track have a tuplet that `time` falls inside of?
+function timeInsideAnyTuplet(time) {
+    for (const layer of [mainStaves, harmonyStaves]) {
+        for (const name of staves) {
+            for (const voice of staffVoices(layer[name]))
+                if (insideTupletSpanOf(voice.unprocessedNotes, time))
+                    return true;
         }
+    }
+    return false;
+}
+// True if a note inside a tuplet, starting in [rangeStart, rangeEnd), would run across a barline. (A tuplet itself may
+// cross barlines between its notes; a single note of it may not.)
+function tupletCrossesBarline(notes, rangeStart, rangeEnd) {
+    const timeline = getUnprocessedTimeline(notes);
+    for (const piece of timeline) {
+        if (!notes[piece.index].tupletInfo)
+            continue;
+        if (piece.start < rangeStart - 1e-9 || piece.start >= rangeEnd - 1e-9)
+            continue;
+        const end = round(piece.start + piece.dur);
+        if (measureIndexAt(piece.start) !== measureIndexAt(round(end - 1e-6)))
+            return true;
     }
     return false;
 }
@@ -634,7 +772,7 @@ function coalesceRests(notes, fresh) {
     const ends = [];
     let pos = 0;
     for (const note of notes) {
-        const duration = note.tupletInfo ? note.tupletInfo.totalTupletDuration / note.tupletInfo.count : getNoteDuration(note);
+        const duration = getRealDuration(note);
         starts.push(round(pos));
         pos = round(pos + duration);
         ends.push(pos);

@@ -29,8 +29,9 @@ interface NoteTarget {
 // A copy of a note that can be changed without touching the original
 function cloneNote(note: UnprocessedNote): UnprocessedNote {
   const copy = new UnprocessedNote([...note.noteName], [...note.octaves], note.duration, note.dotted, note.tiedToNext);
-  if (note.tupletInfo) copy.tupletInfo = { ...note.tupletInfo };
+  copyTuplets(note, copy);
   copy.articulations = [...note.articulations];
+  copy.graceNotes = copyGraceNotes(note.graceNotes);
   return copy;
 }
 
@@ -103,8 +104,82 @@ function buildDetailMenu(): void {
   }
 
   buildDynamicsMenu(host);
+  buildGlissandoMenu(host);
   buildTechniquesMenu(host);
   buildClefKeyMenu(host);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Glissando: a wavy line from a note to the next one. One selected note glides to the note after it; several selected
+// notes glide from each to the next. Stored on the staff, drawn between the notes and played as a quick run.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// The (from, to) start times of the glissandos the selection asks for, per voice
+function glissandoPairs(ctx: EditCtx): GlissMark[] {
+  const pairs: GlissMark[] = [];
+  for (const group of ctx.groups) {
+    const notes = group.store.unprocessedNotes;
+    const timeline = getUnprocessedTimeline(notes);
+    const isHead = (index: number): boolean => {
+      const previous = notes[index - 1];
+      return !notes[index].isRest && !(previous && previous.tiedToNext && !previous.isRest && !notes[index].tupletInfo && samePitches(previous, notes[index]));
+    };
+    const picked = group.entries.map(entry => entry.index).filter(isHead);
+    if (!picked.length) continue;
+    if (picked.length === 1) {
+      let next = picked[0] + 1;
+      while (next < notes.length && !isHead(next)) next++;
+      if (next < notes.length) pairs.push({ start: timeline[picked[0]].start, end: timeline[next].start, voice: group.store.id });
+      continue;
+    }
+    for (let at = 0; at + 1 < picked.length; at++) pairs.push({ start: timeline[picked[at]].start, end: timeline[picked[at + 1]].start, voice: group.store.id });
+  }
+  return pairs;
+}
+
+function sameGlissando(first: GlissMark, second: GlissMark): boolean {
+  return first.voice === second.voice && Math.abs(first.start - second.start) < SAME_TIME && Math.abs(first.end - second.end) < SAME_TIME;
+}
+
+function toggleGlissando(): void {
+  const ctx = getEditContext();
+  if (!ctx) return;
+  const pairs = glissandoPairs(ctx);
+  if (!pairs.length) return;
+  const staff = ctx.part;
+  const allHave = pairs.every(pair => staff.glissandos.some(mark => sameGlissando(mark, pair)));
+  staff.glissandos = staff.glissandos.filter(mark => !pairs.some(pair => sameGlissando(mark, pair)));
+  if (!allHave) staff.glissandos.push(...pairs);
+  staff.glissandos.sort((first, second) => first.start - second.start);
+  drawAllStaves();
+  updateMemory();
+}
+
+function buildGlissandoMenu(host: HTMLElement): void {
+  const heading = document.createElement('div');
+  heading.className = 'buttonDescription';
+  heading.textContent = 'Glissando';
+  host.appendChild(heading);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const button = document.createElement('button');
+  button.className = 'editBtn glissandoBtn';
+  button.id = 'glissandoBtn';
+  button.textContent = 'Gliss.';
+  button.title = 'Glissando from the selected note to the next (several notes: from each to the next)';
+  button.disabled = true;
+  button.addEventListener('click', () => { toggleGlissando(); button.blur(); });
+  row.appendChild(button);
+  host.appendChild(row);
+}
+
+function refreshGlissandoMenu(): void {
+  const button = document.getElementById('glissandoBtn') as HTMLButtonElement | null;
+  if (!button) return;
+  const ctx = currentTab === 'detail' ? getEditContext() : null;
+  const pairs = ctx ? glissandoPairs(ctx) : [];
+  button.disabled = pairs.length === 0;
+  button.classList.toggle('active', pairs.length > 0 && pairs.every(pair => ctx!.part.glissandos.some(mark => sameGlissando(mark, pair))));
 }
 
 function scheduleDetailRefresh(): void {
@@ -122,6 +197,7 @@ function refreshDetailMenu(): void {
     button.disabled = targets.length === 0;
     button.classList.toggle('active', targets.length > 0 && targets.every(target => target.note.articulations.includes(button.dataset.code!)));
   });
+  refreshGlissandoMenu();
   refreshDynamicsMenu();
   refreshTechniquesMenu();
   refreshClefKeyMenu();
@@ -520,7 +596,8 @@ function buildClefKeyMenu(host: HTMLElement): void {
   row.className = 'row';
   row.appendChild(makeTrackChangeSelect('clefSelect', CLEF_OPTIONS, () => trackClefs, 'treble'));
   row.appendChild(makeTrackChangeSelect('keySelect',
-    KEY_OPTIONS.map(entry => ({ value: entry.key, label: `${showAccidentals(entry.key)} major` })),    () => trackKeys, 'C'));
+    KEY_OPTIONS.map(entry => ({ value: entry.key, label: `${showAccidentals(entry.key)} major / ${showAccidentals(entry.minor)} minor` })),
+    () => trackKeys, 'C'));
   host.appendChild(row);
 }
 

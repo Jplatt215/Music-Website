@@ -38,6 +38,79 @@ function generateIntoSelection(staff) {
         jobs.push({ store: writer, transform: generate });
     return applyRangeJobs(sel, jobs);
 }
+// The ways a tuplet can be made: this many notes in the time of that many
+const TUPLET_RATIOS = [[3, 2], [4, 3], [5, 4], [6, 4], [7, 4]];
+// Splits `units` into parts of 1 to 4 units, at random
+function randomParts(units, partUnits) {
+    const parts = [];
+    let left = units;
+    while (left > 0) {
+        const fitting = partUnits.filter(size => size <= left);
+        if (!fitting.length)
+            return [];
+        const size = fitting[Math.floor(Math.random() * fitting.length)];
+        parts.push(size);
+        left -= size;
+    }
+    return parts;
+}
+// A tuplet of notes of different values (sometimes with a small tuplet inside it) that fills occupied x base units of time.
+// It may run across a barline, but none of its notes may. Null if it cannot be made here.
+function makeRandomTuplet(staff, baseKey, allowedDurations, startTime, remaining, firstId) {
+    const base = durationMapping[baseKey];
+    const [count, occupied] = TUPLET_RATIOS[Math.floor(Math.random() * TUPLET_RATIOS.length)];
+    const total = round(occupied * base);
+    if (total > remaining + 1e-9)
+        return null;
+    const keyFor = (units, unit) => {
+        const key = getDurationKeyFromValue(round(units * unit));
+        return key && allowedDurations.includes(key) ? key : null;
+    };
+    // the slots of the outer tuplet: a value each, some of which are replaced by a smaller tuplet
+    const sizes = [1, 2, 3, 4].filter(size => keyFor(size, base));
+    const parts = randomParts(count, sizes);
+    if (parts.length < 2)
+        return null;
+    const slots = parts.map(size => ({ key: keyFor(size, base), inner: null }));
+    if (Math.random() < 0.3) {
+        const candidates = slots.filter(slot => !slot.key.includes('d') && durationMapping[slot.key] >= 1 / 16 && keyFor(1, durationMapping[slot.key] / 2));
+        const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        if (chosen) {
+            const half = durationMapping[chosen.key] / 2;
+            const innerParts = [[1, 1, 1], [1, 2], [2, 1]][Math.floor(Math.random() * 3)];
+            const innerKeys = innerParts.map(size => keyFor(size, half));
+            if (innerKeys.every(key => key))
+                chosen.inner = innerKeys;
+        }
+    }
+    const notes = [];
+    let nextId = firstId + 1;
+    const outerCount = slots.reduce((sum, slot) => sum + (slot.inner ? slot.inner.length : 1), 0);
+    let position = 0;
+    for (const slot of slots) {
+        const keys = slot.inner ?? [slot.key];
+        const innerId = slot.inner ? nextId++ : 0;
+        keys.forEach((key, innerIndex) => {
+            const [noteName, noteOctave] = randomPitchFromScale(staff, durationMapping[key]);
+            const note = new UnprocessedNote(noteName, noteOctave, key.replace(/d$/, ''), key.endsWith('d'));
+            position++;
+            note.setTuplet(firstId, total, [count, occupied], outerCount, position);
+            if (slot.inner)
+                note.innerTuplets = [{ id: innerId, totalTupletDuration: 0, ratio: [3, 2], count: keys.length, index: innerIndex + 1 }];
+            notes.push(note);
+        });
+    }
+    refreshTupletTotals(notes);
+    // no note of it may run across a barline
+    const timeline = getUnprocessedTimeline(notes);
+    for (const piece of timeline) {
+        const from = round(startTime + piece.start);
+        const to = round(startTime + piece.start + piece.dur);
+        if (measureIndexAt(from) !== measureIndexAt(round(to - 1e-6)))
+            return null;
+    }
+    return { notes, total, idsUsed: nextId - firstId };
+}
 function generatePhrase(staff, duration, allowTuplets = true, startOffset = 0) {
     const totalDurationOriginal = totalDuration;
     let notes = [];
@@ -73,24 +146,15 @@ function generatePhrase(staff, duration, allowTuplets = true, startOffset = 0) {
             Math.random() < 0.5 &&
             durationMapping[durationStr] >= 1 / sigOf(measureIndexAt(round(startOffset + currentDuration))).den);
         if (shouldTryTuplet) {
-            const notesOccupied = 2;
-            const possibleTupletSizes = [3, 5, 7];
-            const numTupletNotes = possibleTupletSizes[Math.floor(Math.random() * possibleTupletSizes.length)];
-            const realDuration = 2 * durationMapping[durationStr];
-            const measureRemaining = spaceToBarline(round(startOffset + currentDuration));
-            if (realDuration > measureRemaining + 1e-9)
+            const group = makeRandomTuplet(staff, durationStr, allowedDurations, round(startOffset + currentDuration), remaining, ++tupletId);
+            if (!group) {
+                --tupletId;
                 continue;
-            if (realDuration > remaining + 1e-9)
-                continue;
-            ++tupletId;
-            for (let index = 1; index <= numTupletNotes; index++) {
-                const [noteName, noteOctave] = randomPitchFromScale(staff, durationMapping[durationStr]);
-                const tupletNote = new UnprocessedNote(noteName, noteOctave, durationStr);
-                tupletNote.setTuplet(tupletId, realDuration, [numTupletNotes, notesOccupied], numTupletNotes, index);
-                notes.push(tupletNote);
-                totalDuration += durationMapping[durationStr] * 2 / numTupletNotes;
             }
-            currentDuration = round(currentDuration + realDuration);
+            tupletId += group.idsUsed - 1;
+            notes.push(...group.notes);
+            totalDuration += group.total;
+            currentDuration = round(currentDuration + group.total);
         }
         else {
             const [noteName, noteOctave] = randomPitchFromScale(staff, durationMapping[durationStr]);
@@ -142,6 +206,7 @@ function buildTimeline(pieces, startPos) {
     let pos = startPos;
     let unitStart = pos;
     let unitEnd = pos;
+    let offset = 0;
     for (const note of pieces) {
         if (note.tupletInfo) {
             const info = note.tupletInfo;
@@ -149,15 +214,17 @@ function buildTimeline(pieces, startPos) {
                 unitStart = pos;
                 unitEnd = round(pos + info.totalTupletDuration);
                 tupletSpans.push({ start: unitStart, end: unitEnd });
+                offset = 0;
             }
-            const per = info.totalTupletDuration / info.count;
+            const real = getRealDuration(note);
             timeline.push({
                 note,
-                start: round(unitStart + (info.index - 1) * per),
-                end: round(unitStart + info.index * per),
+                start: round(unitStart + offset),
+                end: round(unitStart + offset + real),
                 unitStart,
                 unitEnd,
             });
+            offset += real;
             if (info.index === info.count)
                 pos = unitEnd;
         }
@@ -218,8 +285,7 @@ function distributePieces(timeline, targets, ranges, active, sourceName) {
             const newNote = (name === target && !note.isRest)
                 ? new UnprocessedNote([...note.noteName], [...note.octaves], note.duration, note.dotted, note.tiedToNext)
                 : makeRest(note.duration, note.dotted);
-            if (note.tupletInfo)
-                newNote.tupletInfo = { ...note.tupletInfo };
+            copyTuplets(note, newNote);
             out[name].push(newNote);
         }
     }
@@ -281,10 +347,8 @@ function separateStaff() {
 function reverseNotes(notes) {
     const reversed = [...notes].reverse();
     for (const note of reversed) {
-        if (note.tupletInfo) {
-            const { id, totalTupletDuration, ratio, count, index } = note.tupletInfo;
-            note.tupletInfo = { id, totalTupletDuration, ratio, count, index: count - index + 1 };
-        }
+        for (const level of tupletLevels(note))
+            level.index = level.count - level.index + 1;
     }
     return reversed;
 }
@@ -334,8 +398,7 @@ function reflectNotes(notes, staff, axisPitch) {
                 newOctave -= Math.ceil((noteIdx - maxIdx) / 12);
             reflectedNote = new UnprocessedNote([reflectedPitch], newOctave, getDurationString(note));
         }
-        if (note.tupletInfo)
-            reflectedNote.tupletInfo = { ...note.tupletInfo };
+        copyTuplets(note, reflectedNote);
         reflectedNotes.push(reflectedNote);
     }
     return reflectedNotes;
@@ -346,37 +409,12 @@ function shiftStaff(staff, distance) {
     // Plan every voice first; nothing changes unless all of them can shift
     const plans = [];
     for (const voice of staffVoices(staff)) {
-        // Check tuplets won't cross barlines after shift
-        let currentPos = shiftDur;
-        for (const note of voice.unprocessedNotes) {
-            if (note.tupletInfo) {
-                const { index, count, totalTupletDuration } = note.tupletInfo;
-                if (index === 1) {
-                    const measureEnd = barlineAfter(round(currentPos));
-                    if (currentPos + totalTupletDuration > measureEnd) {
-                        console.warn("Shift rejected: tuplet would cross measure boundary");
-                        return;
-                    }
-                }
-                if (index === count)
-                    currentPos += totalTupletDuration;
-            }
-            else {
-                currentPos += getNoteDuration(note);
-            }
-        }
         const shifted = [makeRest(distance), ...voice.unprocessedNotes];
-        let totalDur = 0;
-        for (const note of shifted) {
-            if (note.tupletInfo) {
-                if (note.tupletInfo.index === note.tupletInfo.count)
-                    totalDur += note.tupletInfo.totalTupletDuration;
-            }
-            else {
-                totalDur += getNoteDuration(note);
-            }
+        if (tupletCrossesBarline(shifted, 0, Infinity)) {
+            console.warn("Shift rejected: a tuplet note would cross a barline");
+            return;
         }
-        totalDur = round(totalDur);
+        const totalDur = notesDuration(shifted);
         const remainder = posInMeasureAt(totalDur) > 1e-9 ? spaceToBarline(totalDur) : 0;
         if (remainder > 1e-9)
             shifted.push(...fillDurationWithRests(remainder, totalDur));
@@ -424,8 +462,7 @@ function transposeNotes(notes, staff, scaleDegreeDifference) {
             transposedNote = new UnprocessedNote(transposedPitch, newOctave, getDurationString(note));
             transposedNote.articulations = [...note.articulations];
         }
-        if (note.tupletInfo)
-            transposedNote.tupletInfo = { ...note.tupletInfo };
+        copyTuplets(note, transposedNote);
         transposedNotes.push(transposedNote);
     }
     return transposedNotes;
@@ -471,6 +508,7 @@ function shuffleRhythmNotes(notes) {
                 const pitch = pitches[pitchIdx++];
                 const newNote = new UnprocessedNote(pitch.noteName, pitch.octave, rhythmNote.duration, rhythmNote.dotted);
                 newNote.setTuplet(newTupletId, firstNoteInfo.totalTupletDuration, [...firstNoteInfo.ratio], firstNoteInfo.count, itemIndex + 1);
+                newNote.innerTuplets = rhythmNote.innerTuplets.map(level => ({ ...level, ratio: [...level.ratio] }));
                 newNotes.push(newNote);
             }
         }
@@ -511,7 +549,8 @@ function shuffleNotesNotes(notes) {
             ++tupletId;
             const firstNoteInfo = group.notes[0].tupletInfo;
             const shuffled = [...group.notes];
-            for (let itemIndex = shuffled.length - 1; itemIndex > 0; itemIndex--) {
+            const hasInner = shuffled.some(note => note.innerTuplets.length > 0); // notes of a tuplet inside this one stay where they are
+            for (let itemIndex = shuffled.length - 1; itemIndex > 0 && !hasInner; itemIndex--) {
                 const swapWith = Math.floor(Math.random() * (itemIndex + 1));
                 [shuffled[itemIndex], shuffled[swapWith]] = [shuffled[swapWith], shuffled[itemIndex]];
             }
@@ -519,6 +558,7 @@ function shuffleNotesNotes(notes) {
                 const tupletNote = shuffled[noteIndex];
                 const newNote = new UnprocessedNote(tupletNote.noteName, tupletNote.octave, tupletNote.duration, tupletNote.dotted);
                 newNote.setTuplet(tupletId, firstNoteInfo.totalTupletDuration, [...firstNoteInfo.ratio], firstNoteInfo.count, noteIndex + 1);
+                newNote.innerTuplets = tupletNote.innerTuplets.map(level => ({ ...level, ratio: [...level.ratio] }));
                 newNotes.push(newNote);
             }
         }
@@ -546,8 +586,7 @@ function shufflePitchNotes(notes) {
             const pitch = pitches[pitchIdx++];
             newNote = new UnprocessedNote(pitch.noteName, pitch.octave, note.duration, note.dotted);
         }
-        if (note.tupletInfo)
-            newNote.tupletInfo = { ...note.tupletInfo };
+        copyTuplets(note, newNote);
         newNotes.push(newNote);
     }
     return newNotes;
@@ -622,11 +661,8 @@ function changePitchNotes(notes, staff, startOffset) {
             const [noteName, octave] = randomPitchFromScale(staff, getNoteDuration(note), false);
             newNote = new UnprocessedNote(noteName, octave, note.duration, note.dotted);
         }
-        if (note.tupletInfo)
-            newNote.tupletInfo = { ...note.tupletInfo };
-        totalDuration += note.tupletInfo
-            ? note.tupletInfo.totalTupletDuration / note.tupletInfo.count
-            : getNoteDuration(note);
+        copyTuplets(note, newNote);
+        totalDuration += getRealDuration(note);
         return newNote;
     });
     return newNotes;
@@ -648,6 +684,12 @@ function simplifyNotes(notes, startOffset) {
             const { totalTupletDuration, ratio } = tupletNotes[0].tupletInfo;
             const [, notesOccupied] = ratio;
             elapsed = round(elapsed + totalTupletDuration);
+            // tuplets of mixed values, or with another tuplet inside, are left as they are
+            const plain = tupletNotes.every(tupletNote => tupletNote.duration === tupletNotes[0].duration && tupletNote.dotted === tupletNotes[0].dotted && tupletNote.innerTuplets.length === 0);
+            if (!plain) {
+                tupletNotes.forEach(tupletNote => { const copy = new UnprocessedNote([...tupletNote.noteName], [...tupletNote.octaves], tupletNote.duration, tupletNote.dotted); copyTuplets(tupletNote, copy); simplifiedNotes.push(copy); });
+                continue;
+            }
             let kept = [...tupletNotes];
             const target = Math.max(3, 2 + Math.floor(Math.random() * (kept.length - 2)));
             while (kept.length > target)
@@ -756,17 +798,95 @@ function complicateNotes(notes, staff, startOffset) {
     }
     return newNotes;
 }
-// Create tab: Delete turns whatever is inside each track's selected range into rests
+// Delete one stretch of time from a list of notes: Overwrite leaves rests there, Insert closes the gap (rests at the
+// end keep the length). Null if the stretch cuts through a tuplet.
+function deleteSpan(notes, from, to, closeGap) {
+    const { before, after, ok } = sliceRange({ unprocessedNotes: notes }, from, to);
+    if (!ok)
+        return null;
+    const head = cloneNotes(before);
+    const tail = cloneNotes(after);
+    if (head.length)
+        head[head.length - 1].tiedToNext = false;
+    const gap = round(to - from);
+    if (closeGap)
+        return [...head, ...tail, ...fillDurationWithRests(gap, notesDuration([...head, ...tail]))];
+    return coalesceRests([...head, ...fillDurationWithRests(gap, from), ...tail], (_index, start, end) => start < to - 1e-9 && end > from + 1e-9);
+}
+// Create tab Delete, following the Insert / Overwrite / Polyphony mode. A tuplet the range only partly covers keeps its
+// length: the notes of it inside the range become rests in place. A tuplet inside the range goes whole.
 function deleteNotesInRanges() {
     const active = getActiveStaves();
-    let any = false;
+    const jobs = [];
     for (const name of staves) {
-        const applied = applyToRange(active[name], clearedToRests);
-        if (applied)
-            any = true;
+        const sel = getSelection(name);
+        if (!sel)
+            continue;
+        for (const store of selectionTargets(active[name], sel)) {
+            let notes = cloneNotes(store.unprocessedNotes);
+            const timeline = getUnprocessedTimeline(notes);
+            // outermost tuplets that the range covers only in part
+            const groups = new Map();
+            timeline.forEach((entry, index) => {
+                const id = notes[index].tupletInfo?.id;
+                if (id === undefined)
+                    return;
+                const group = groups.get(id) ?? { start: entry.start, end: entry.start, members: [] };
+                group.end = round(entry.start + entry.dur);
+                group.members.push(index);
+                groups.set(id, group);
+            });
+            const kept = [];
+            let changedMembers = false;
+            for (const group of groups.values()) {
+                const overlaps = group.start < sel.end - 1e-9 && group.end > sel.start + 1e-9;
+                const inside = group.start >= sel.start - 1e-9 && group.end <= sel.end + 1e-9;
+                if (!overlaps || inside)
+                    continue;
+                kept.push({ start: group.start, end: group.end });
+                for (const member of group.members) {
+                    const entry = timeline[member];
+                    if (entry.start < sel.end - 1e-9 && entry.start + entry.dur > sel.start + 1e-9 && !notes[member].isRest) {
+                        const rest = makeRest(notes[member].duration, notes[member].dotted);
+                        copyTuplets(notes[member], rest);
+                        notes[member] = rest;
+                        changedMembers = true;
+                    }
+                }
+            }
+            // the rest of the range, without those tuplets, latest stretch first so earlier positions stay put
+            const stretches = [];
+            let cursor = sel.start;
+            for (const hole of kept.sort((first, second) => first.start - second.start)) {
+                if (hole.start > cursor + 1e-9)
+                    stretches.push({ start: cursor, end: Math.min(hole.start, sel.end) });
+                cursor = Math.max(cursor, hole.end);
+            }
+            if (cursor < sel.end - 1e-9)
+                stretches.push({ start: cursor, end: sel.end });
+            for (const stretch of stretches.reverse()) {
+                const next = deleteSpan(notes, stretch.start, stretch.end, insertMode);
+                if (!next) {
+                    alert(`Selection in ${store.name} cuts through a tuplet — adjust it to cover the whole tuplet.`);
+                    return;
+                }
+                notes = next;
+            }
+            renumberTuplets(notes);
+            if (tupletCrossesBarline(notes, 0, Infinity)) {
+                alert(`That change would put a tuplet note across a barline in ${store.name}.`);
+                return;
+            }
+            if (stretches.length || changedMembers)
+                jobs.push({ store, notes });
+        }
     }
-    if (any) {
-        drawAllStaves();
-        updateMemory();
+    if (!jobs.length)
+        return;
+    for (const job of jobs) {
+        resetVoice(job.store);
+        processNotes(job.store, job.notes);
     }
+    drawAllStaves();
+    updateMemory();
 }

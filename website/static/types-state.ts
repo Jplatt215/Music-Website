@@ -40,8 +40,10 @@ interface MemorySnapshot {
   duration: string;
   dotted: boolean;
   tupletInfo: TupletInfo | null;
+  innerTuplets?: TupletInfo[];
   tiedToNext: boolean;
   articulations?: string[];
+  graceNotes?: GraceNote[];
 }
 
 // One staff's notes in a snapshot: Up 1 always, plus any other voices the staff has (keyed by voice id)
@@ -58,12 +60,36 @@ interface GlobalSnapshot {
   techniques?: { main: Record<string, TechniqueMark[]>; harmony: Record<string, TechniqueMark[]> };
   clefs?: Record<string, TrackChange[]>;
   keys?: Record<string, TrackChange[]>;
+  slurs?: { main: Record<string, SlurMark[]>; harmony: Record<string, SlurMark[]> };
+  glissandos?: { main: Record<string, GlissMark[]>; harmony: Record<string, GlissMark[]> };
+}
+
+// A small note written before a main note (slash = crossed stem, an acciaccatura)
+interface GraceNote {
+  noteName: string[];
+  octaves: number[];
+  duration: string;      // '8', '16' or '32'
+  slash: boolean;
+}
+
+// A slur over the notes of one voice from `start` to `end` (whole notes from the start of the piece)
+interface SlurMark {
+  start: number;
+  end: number;
+  voice: VoiceId;
+}
+
+// A glissando from the note that starts at `start` to the note that starts at `end`
+interface GlissMark {
+  start: number;
+  end: number;
+  voice: VoiceId;
 }
 
 const globalMemory: GlobalSnapshot[] = [];
 let globalMemoryIndex: number = -1;
 
-const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Articulation, Formatter, Tuplet } = Vex.Flow;
+const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Articulation, Formatter, Tuplet, GraceNote: VFGraceNote, GraceNoteGroup, Curve } = Vex.Flow;
 // Notes carry their own stave when drawn, so VexFlow decides collisions per staff (see customStaveNoteFormat)
 const STAVENOTE_FORMAT_VEXFLOW = (StaveNote as any).format;
 const containers: Record<string, HTMLElement> = {};
@@ -212,6 +238,8 @@ class Staff implements VoiceLike {
   muted: boolean;
   dynamics: DynamicMark[] = [];       // pp, f, crescendo ... drawn under the staff
   techniques: TechniqueMark[] = [];   // pizz., con sord. ... drawn above the staff
+  slurs: SlurMark[] = [];             // drawn between the notes they cover
+  glissandos: GlissMark[] = [];       // drawn between a note and the next
   duration: number;
   requiredWidth: number;
 
@@ -260,6 +288,8 @@ function resetStaffToDefaults(staff: Staff, rhythmRange: number[]): void {
   staff.extraVoices = [];
   staff.dynamics = [];
   staff.techniques = [];
+  staff.slurs = [];
+  staff.glissandos = [];
   resetStaff(staff);
 }
 
@@ -269,8 +299,10 @@ class UnprocessedNote {
   duration: string;
   dotted: boolean;
   isRest: boolean;
-  tupletInfo: TupletInfo | null;
+  tupletInfo: TupletInfo | null;     // the outermost tuplet the note is in (its count, index and total cover everything inside it)
+  innerTuplets: TupletInfo[];        // tuplets nested inside that one, outermost first
   tiedToNext: boolean;
+  graceNotes: GraceNote[];      // small notes written (and played) just before this one
   articulations: string[];      // VexFlow codes ("a." staccato, "a>" accent, ...), on the first note of a tied chain
 
   constructor(noteName: string | string[], octave: number | number[], duration: string, dotted: boolean = false, tiedToNext: boolean = false) {
@@ -281,19 +313,41 @@ class UnprocessedNote {
     this.dotted = dotted;
     this.isRest = this.noteName[0] === "Rest";
     this.tupletInfo = null;
+    this.innerTuplets = [];
     this.tiedToNext = tiedToNext;
     this.articulations = [];
+    this.graceNotes = [];
   }
 
   get octave(): number { return this.octaves[0]; }
 
   toStaveNote(): any {
-    return createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration, this.articulations);
+    const note = createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration, this.articulations);
+    note._graces = this.graceNotes;   // drawn by drawAllStaves, which knows the clef and key
+    return note;
   }
 
   setTuplet(id: number, totalTupletDuration: number, ratio: [number, number], count: number, index: number): void {
     this.tupletInfo = { id, totalTupletDuration, ratio, count, index };
   }
+}
+
+// Every tuplet a note is in, outermost first
+function tupletLevels(note: UnprocessedNote): TupletInfo[] {
+  return note.tupletInfo ? [note.tupletInfo, ...note.innerTuplets] : [];
+}
+
+// How long a note lasts: its written value, squeezed by every tuplet it is in (not rounded, so thirds add up exactly)
+function getRealDuration(note: UnprocessedNote): number {
+  let duration = getNoteDuration(note);
+  for (const level of tupletLevels(note)) duration = duration * level.ratio[1] / level.ratio[0];
+  return duration;
+}
+
+// Puts `target` in the same tuplets as `source`
+function copyTuplets(source: UnprocessedNote, target: UnprocessedNote): void {
+  target.tupletInfo = source.tupletInfo ? { ...source.tupletInfo, ratio: [...source.tupletInfo.ratio] as [number, number] } : null;
+  target.innerTuplets = source.innerTuplets.map(level => ({ ...level, ratio: [...level.ratio] as [number, number] }));
 }
 
 const staff1 = new Staff("staff1", ["C4", "C6"]);

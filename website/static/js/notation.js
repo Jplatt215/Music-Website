@@ -15,6 +15,8 @@ function positionArticulations(vfNote) {
     }
 }
 function customStaveNoteFormat(notes, state) {
+    if (!notes)
+        return false; // a grace note group formats with no staff notes in its context
     const before = state.right_shift;
     const result = STAVENOTE_FORMAT_VEXFLOW(notes, state); // rests: vertical moves, hiding identical rests
     state.right_shift = before; // we decide the extra width ourselves
@@ -173,6 +175,111 @@ function applyKeyAccidentals(note, key) {
     note._keyName = key;
     note._preFormatted = false;
 }
+// Writes a note's grace notes in the clef and key of its measure (called every time the staff is drawn)
+function rebuildGraceNotes(note, clef, key) {
+    const graces = note._graces;
+    if (note._graceGroup) {
+        note.modifiers = note.modifiers.filter((modifier) => modifier !== note._graceGroup);
+        note._graceGroup = null;
+        note._preFormatted = false;
+    }
+    if (!graces || !graces.length || note.isRest())
+        return;
+    const inKey = keyAccidentals(key);
+    const vfGraces = graces.map(grace => {
+        const entries = grace.noteName.map((name, index) => {
+            const { letter, acc } = parsePitchName(name);
+            return { letter, acc, octave: grace.octaves[index] ?? grace.octaves[0] };
+        }).sort((first, second) => staffPosition(first.letter, first.octave) - staffPosition(second.letter, second.octave));
+        const graceNote = new VFGraceNote({ keys: entries.map(entry => `${entry.letter}/${entry.octave}`), duration: grace.duration, slash: grace.slash, clef });
+        entries.forEach((entry, index) => {
+            if (entry.acc !== (inKey[entry.letter] ?? ''))
+                graceNote.addModifier(new Accidental(entry.acc === '' ? 'n' : entry.acc), index);
+        });
+        return graceNote;
+    });
+    const group = new GraceNoteGroup(vfGraces, !graces[0].slash);
+    if (vfGraces.length > 1)
+        group.beamNotes();
+    note.addModifier(group, 0);
+    note._graceGroup = group;
+    note._preFormatted = false;
+}
+// The drawn notes of one voice that hold a note (not a rest) starting in [from, to)
+function voiceNotesBetween(voice, from, to) {
+    const found = [];
+    for (const measure of voice.notes) {
+        for (const note of measure) {
+            if (note.isRest())
+                continue;
+            const timing = noteTiming.get(note);
+            if (timing && timing.start >= from - 1e-6 && timing.start < to - 1e-6)
+                found.push(note);
+        }
+    }
+    return found;
+}
+function drawSlurs(staff, context) {
+    for (const slur of staff.slurs) {
+        const voice = getVoice(staff, slur.voice);
+        if (!voice)
+            continue;
+        const covered = voiceNotesBetween(voice, slur.start, slur.end);
+        if (covered.length < 2)
+            continue;
+        const first = covered[0];
+        const last = covered[covered.length - 1];
+        try {
+            const below = first.getStemDirection() === 1;
+            new Curve(first, last, { cps: [{ x: 0, y: 10 }, { x: 0, y: 10 }], invert: below, position: Curve.Position.NEAR_HEAD, position_end: Curve.Position.NEAR_HEAD }).setContext(context).draw();
+        }
+        catch (err) {
+            console.error('slur failed', err);
+        }
+    }
+}
+// A wavy line from one note to the next
+function drawGlissandos(staff, context) {
+    for (const mark of staff.glissandos) {
+        const voice = getVoice(staff, mark.voice);
+        if (!voice)
+            continue;
+        const from = voiceNotesBetween(voice, mark.start, mark.start + 1e-5)[0];
+        const to = voiceNotesBetween(voice, mark.end, mark.end + 1e-5)[0];
+        if (!from || !to)
+            continue;
+        try {
+            const startX = from.getNoteHeadEndX() + 4;
+            const endX = to.getNoteHeadBeginX() - 4;
+            const startY = from.getYs()[0];
+            const endY = to.getYs()[0];
+            if (endX - startX < 6)
+                continue;
+            const length = Math.hypot(endX - startX, endY - startY);
+            const steps = Math.max(8, Math.round(length / 2));
+            const nx = -(endY - startY) / length;
+            const ny = (endX - startX) / length;
+            context.save();
+            context.setLineWidth(1.2);
+            context.beginPath();
+            for (let step = 0; step <= steps; step++) {
+                const ratio = step / steps;
+                const wave = Math.sin(ratio * length / 3.2) * 1.6;
+                const pointX = startX + (endX - startX) * ratio + nx * wave;
+                const pointY = startY + (endY - startY) * ratio + ny * wave;
+                if (step === 0)
+                    context.moveTo(pointX, pointY);
+                else
+                    context.lineTo(pointX, pointY);
+            }
+            context.stroke();
+            context.restore();
+        }
+        catch (err) {
+            console.error('glissando failed', err);
+        }
+    }
+}
 function getTupletsForMeasure(staff, measureIndex) {
     const measureNoteSet = new Set(staff.notes[measureIndex]);
     return staff.tuplets
@@ -253,6 +360,7 @@ function drawAllStaves(includeHarmony = false) {
                 notes.forEach((note) => {
                     retargetClef(note, clef, !several);
                     applyKeyAccidentals(note, key);
+                    rebuildGraceNotes(note, clef, key);
                     note.setStave(stave); // attach every note to its own staff: collisions are then decided per staff
                     note._stems = several ? voice.stems : undefined;
                     if (several && !note.isRest() && note.getStemDirection() !== voice.stems)
@@ -309,6 +417,10 @@ function drawAllStaves(includeHarmony = false) {
     staffList.forEach(staff => {
         staffVoices(staff).forEach(voice => drawTies(voice.ties, contexts[staff.name]));
     });
+    staffList.forEach(staff => {
+        drawSlurs(staff, contexts[staff.name]);
+        drawGlissandos(staff, contexts[staff.name]);
+    });
     renderGridOverlays(staffList);
     // Set staffWrapper width to match notation width so sticky works
     document.querySelectorAll('.staffWrapper').forEach(wrapper => {
@@ -362,13 +474,13 @@ function changeMeasureSig(index, num, den) {
     measureSigs = measureSigs.map(sig => ({ ...sig, groups: [...sig.groups] }));
     for (let measure = index; measure < end; measure++)
         measureSigs[measure] = makeSig(num, den);
-    // a tuplet may not end up across a barline
+    // no note of a tuplet may end up across a barline
     for (const layer of [mainStaves, harmonyStaves]) {
         for (const staffName of staves) {
             for (const voice of staffVoices(layer[staffName])) {
                 if (tupletCrossesBarline(voice.unprocessedNotes, 0, 1e9)) {
                     measureSigs = saved;
-                    alert(`Cannot change the time signature — a tuplet in ${staffName} would cross a barline.`);
+                    alert(`Cannot change the time signature — a tuplet note in ${staffName} would cross a barline.`);
                     return false;
                 }
             }
@@ -562,6 +674,10 @@ function insertMeasureAfter(measureIndex) {
     padStavesToLength();
     normalizeSigs();
     const insertAtDur = measureStartOf(measureIndex + 1);
+    if (timeInsideAnyTuplet(insertAtDur)) {
+        alert('Cannot insert a measure here: it would cut through a tuplet.');
+        return;
+    }
     const copy = sigOf(measureIndex);
     measureSigs.splice(measureIndex + 1, 0, { num: copy.num, den: copy.den, groups: [...copy.groups] }); // the new measure has its neighbour's signature
     const len = measureLenOf(measureIndex + 1);
@@ -644,8 +760,7 @@ function deleteMeasureFromNotes(notes, startDur, endDur) {
         if (noteEnd <= startDur + 1e-9) {
             if (round(noteEnd) === round(startDur) && note.tiedToNext) {
                 const cleared = new UnprocessedNote([...note.noteName], note.octaves, note.duration, note.dotted, false);
-                if (note.tupletInfo)
-                    cleared.tupletInfo = { ...note.tupletInfo };
+                copyTuplets(note, cleared);
                 newNotes.push(cleared);
             }
             else {
@@ -676,7 +791,7 @@ function measureIsBlank(measureIndex) {
             for (const voice of staffVoices(layer[name])) {
                 let pos = 0;
                 for (const note of voice.unprocessedNotes) {
-                    const duration = note.tupletInfo ? note.tupletInfo.totalTupletDuration / note.tupletInfo.count : getNoteDuration(note);
+                    const duration = getRealDuration(note);
                     if (!note.isRest && pos < end - 1e-9 && pos + duration > start + 1e-9)
                         return false;
                     pos = round(pos + duration);
@@ -751,6 +866,10 @@ function deleteMeasure(measureIndex) {
     if (measureIsBlank(measureIndex)) {
         while (measureIndex + count < total && measureIsBlank(measureIndex + count))
             count++;
+    }
+    if (timeInsideAnyTuplet(measureStartOf(measureIndex)) || timeInsideAnyTuplet(measureStartOf(measureIndex + count))) {
+        alert('Cannot delete this measure: a tuplet runs into it from a neighbouring measure.');
+        return;
     }
     for (let otherIndex = 0; otherIndex < count; otherIndex++)
         deleteMeasureStep(measureIndex, false);

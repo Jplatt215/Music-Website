@@ -32,7 +32,7 @@ function buildCells(notes: UnprocessedNote[]): Cell[] {
       while (itemIndex < notes.length && notes[itemIndex].tupletInfo) {
         const info = notes[itemIndex].tupletInfo!;
         group.push(notes[itemIndex]);
-        total = info.totalTupletDuration;
+        total += getRealDuration(notes[itemIndex]);
         itemIndex++;
         if (info.index === info.count) break;
       }
@@ -88,6 +88,16 @@ function piecesFor(cell: Cell, start: number, end: number): UnprocessedNote[] {
   return pieces;
 }
 
+// A key is a note value ("q", "8d") or, for a drag, an exact length ("len:0.3125") that may need several tied notes
+function keyLength(key: string): number {
+  return key.startsWith('len:') ? Number(key.slice(4)) : durationMapping[key];
+}
+
+function notesForKey(template: UnprocessedNote, key: string): UnprocessedNote[] {
+  if (!key.startsWith('len:')) return [noteWithDuration(template, key)];
+  return fillDurationAsUnprocessed(round(keyLength(key)), template);
+}
+
 function noteWithDuration(template: UnprocessedNote, key: string): UnprocessedNote {
   if (template.isRest) return makeRest(key);
   const note = new UnprocessedNote([...template.noteName], [...template.octaves], key, false, false);
@@ -95,8 +105,57 @@ function noteWithDuration(template: UnprocessedNote, key: string): UnprocessedNo
   return note;
 }
 
-// Overwrites [s, e) with `fresh`. Cells partly covered are cut; a tuplet may only be removed whole.
-function paint(cells: Cell[], from: number, to: number, fresh: UnprocessedNote[]): Cell[] | null {
+let paintReach: number | null = null;   // where an overwrite into the start of a tuplet really ended (at a note of the tuplet)
+
+// A note reaching into the start of a tuplet: the tuplet's notes it covers take over its pitch (tied on from it).
+// A tuplet note it only partly covers stays as it was. Null if it doesn't reach the end of even the first one.
+function coverTupletStart(cell: Cell, from: number, to: number, fresh: UnprocessedNote[]): { head: UnprocessedNote[] | null; tuplet: Cell; reach: number } | null {
+  const template = fresh[0];
+  const members = [...cell.notes];
+  let position = cell.start;
+  let reach = cell.start;
+  let coveredCount = 0;
+  for (const member of members) {
+    const end = round(position + getRealDuration(member));
+    if (end > to + 1e-9) break;
+    coveredCount++;
+    reach = end;
+    position = end;
+  }
+  if (!coveredCount) return null;
+
+  const replaced = members.map((member, at) => {
+    if (at >= coveredCount) return member;
+    const copy = template.isRest
+      ? makeRest(member.duration, member.dotted)
+      : new UnprocessedNote([...template.noteName], [...template.octaves], member.duration, member.dotted, at < coveredCount - 1);
+    copyTuplets(member, copy);
+    return copy;
+  });
+
+  let head: UnprocessedNote[] | null = null;
+  if (cell.start - from > 1e-9) {
+    head = fillDurationAsUnprocessed(round(cell.start - from), template);
+    if (head.length && !template.isRest) head[head.length - 1].tiedToNext = true;   // held on into the tuplet
+  }
+  return { head, tuplet: { ...cell, notes: replaced }, reach };
+}
+
+// Overwrites [s, e) with `fresh`. Cells partly covered are cut; a tuplet may only be removed whole
+// (or, with intoTuplets, have its first notes taken over by a note that reaches into it).
+function paint(cells: Cell[], from: number, to: number, fresh: UnprocessedNote[], intoTuplets: boolean = false): Cell[] | null {
+  paintReach = null;
+  if (intoTuplets) {
+    const partial = cells.find(cell => cell.isTuplet && cell.start >= from - 1e-9 && cell.start < to - 1e-9 && cell.end > to + 1e-9);
+    if (partial) {
+      const split = coverTupletStart(partial, from, to, fresh);
+      if (!split) return null;
+      const swapped = cells.map(cell => (cell === partial ? split.tuplet : cell));
+      const done = split.head ? paint(swapped, from, partial.start, split.head) : swapped;
+      paintReach = split.reach;
+      return done;
+    }
+  }
   const out: Cell[] = [];
   let inserted = false;
   const flush = () => {
@@ -156,13 +215,15 @@ function overwriteEdit(cells: Cell[], selStart: number, selEnd: number, total: n
     const current = cells[itemIndex];
     const key = keyFor(current);
     if (!key) return null;
-    const extendedEnd = round(current.start + durationMapping[key]);
+    const extendedEnd = round(current.start + keyLength(key));
 
-    const painted = paint(work, current.start, extendedEnd, [noteWithDuration(current.notes[0], key)]);
+    const freshNotes = notesForKey(current.notes[0], key);
+    if (!freshNotes.length) return null;
+    const painted = paint(work, current.start, extendedEnd, freshNotes, true);
     if (!painted) return null;
     work = painted;
     newStart = Math.min(newStart, current.start);
-    newEnd = Math.max(newEnd, extendedEnd);
+    newEnd = Math.max(newEnd, paintReach ?? extendedEnd);
     newTotal = Math.max(newTotal, extendedEnd);
   }
 
@@ -187,8 +248,10 @@ function insertEdit(cells: Cell[], selStart: number, selEnd: number, total: numb
     const cell = cells[itemIndex];
     const key = keyFor(cell);
     if (!key) return null;
-    placed.push(noteWithDuration(cell.notes[0], key));
-    pos = round(pos + durationMapping[key]);
+    const made = notesForKey(cell.notes[0], key);
+    if (!made.length) return null;
+    placed.push(...made);
+    pos = round(pos + keyLength(key));
     oldSpan = round(oldSpan + (cell.end - cell.start));
   }
   const newSpan = round(pos - start);
@@ -328,10 +391,11 @@ interface EditGroup {
   notes: UnprocessedNote[];
 }
 
-function getEditContext(): EditCtx | null {
-  if (!gridViewOn || currentTab === 'create') return null;
+function getEditContext(anyTab: boolean = false, onlyStaff?: string): EditCtx | null {
+  if (!gridViewOn || (currentTab === 'create' && !anyTab)) return null;
   const active = getActiveStaves();
   for (const name of staves) {
+    if (onlyStaff !== undefined && name !== onlyStaff) continue;
     const sel = getSelection(name);
     if (!sel) continue;
     const staff = active[name];
@@ -519,9 +583,10 @@ function polyphonyEdit(
   for (const cell of selected) {
     const key = keyFor(cell);
     if (!key) return null;
-    const e1 = round(cell.start + durationMapping[key]);
+    const e1 = round(cell.start + keyLength(key));
     newTotal = Math.max(newTotal, e1);
-    const note = noteWithDuration(cell.notes[0], key);
+    const placedNotes = notesForKey(cell.notes[0], key);
+    if (!placedNotes.length) return null;
     const sourceVoiceCells = cellsOf(sourceId);
 
     // an earlier selected note may already have overwritten this one
@@ -530,7 +595,7 @@ function polyphonyEdit(
 
     const overwriteHere = (): boolean => {
       const cleared = clearCells(sourceVoiceCells, cell.start, cell.end);
-      const painted = cleared && paint(cleared, cell.start, e1, [note]);
+      const painted = cleared && paint(cleared, cell.start, e1, placedNotes);
       if (!painted) return false;
       work[sourceId] = painted;
       touched.add(sourceId);
@@ -558,7 +623,7 @@ function polyphonyEdit(
     for (const id of others) {
       const destVoiceCells = cellsOf(id);
       if (overlappingCells(destVoiceCells, cell.start, e1).some(cell => blocksPitches(cell, mine))) continue;
-      const painted = paint(destVoiceCells, cell.start, e1, [note]);
+      const painted = paint(destVoiceCells, cell.start, e1, placedNotes);
       if (painted) { dest = id; destCells = painted; break; }
     }
     if (!dest || !destCells) return null;
@@ -669,7 +734,7 @@ function insertAcrossVoices(
 
   const deltas = selectedCellIndices(cells, selStart, selEnd).map(index => {
     const cell = cells[index];
-    return { at: cell.end, delta: round(durationMapping[keyFor(cell)!] - (cell.end - cell.start)) };
+    return { at: cell.end, delta: round(keyLength(keyFor(cell)!) - (cell.end - cell.start)) };
   }).filter(shift => Math.abs(shift.delta) > 1e-9);
 
   const endOf = (notes: UnprocessedNote[]): number => {
@@ -694,6 +759,52 @@ function insertAcrossVoices(
   return { changes, selection: { ...own.selection, voice: sourceId }, newTotal: own.newTotal };
 }
 
+// Overwrite changes this voice only, Polyphony may also move the note into another voice, and Insert moves every voice
+let blockedByBarline = false;   // the last duration edit was refused because a tuplet note would have crossed a barline
+
+function runDurationMode(ctx: EditCtx, cells: Cell[], keyFor: KeyFor): VoiceEditResult | null {
+  blockedByBarline = false;
+  const store = ctx.store;
+  const total = notesDuration(store.unprocessedNotes);
+  const { start, end } = ctx.sel;
+  const result = insertMode
+    ? insertAcrossVoices(ctx.part, store.id, cells, start, end, total, keyFor)
+    : polyphonyMode
+      ? polyphonyEdit(ctx.part, store.id, start, end, total, keyFor)
+      : singleVoiceResult(overwriteEdit(cells, start, end, total, keyFor), store.id);
+  if (!result) return null;
+  for (const id of Object.keys(result.changes) as VoiceId[]) {
+    if (tupletCrossesBarline(result.changes[id]!, 0, Infinity)) { blockedByBarline = true; return null; }
+  }
+  return result;
+}
+
+const BARLINE_MESSAGE = 'That change would move a tuplet note across a barline. A tuplet can run over a barline only between its notes.';
+
+// Dragging the right edge of the selected note to `newEnd`: the same as a duration edit, whatever the mode
+function resizeNoteEnd(newEnd: number, staffName?: string): boolean | null {
+  const ctx = getEditContext(true, staffName);           // works in the Create tab too
+  if (!ctx) return null;
+  if (ctx.multi) return false;
+  const cells = buildCells(ctx.store.unprocessedNotes);
+  const picked = selectedCellIndices(cells, ctx.sel.start, ctx.sel.end);
+  if (picked.length !== 1 || cells[picked[0]].isTuplet) return false;
+  const length = round(newEnd - cells[picked[0]].start);
+  if (length < 1e-9) return false;
+  const result = runDurationMode(ctx, cells, () => 'len:' + length);
+  if (!result) {
+    if (blockedByBarline) alert(BARLINE_MESSAGE);
+    return false;
+  }
+  const stays = (!ctx.sel.voice || ctx.sel.voice === 'all') && result.selection.voice === ctx.store.id;
+  commitVoiceEdits(ctx.part, result.changes, {
+    start: result.selection.start, end: result.selection.end,
+    voice: stays ? 'all' : result.selection.voice,
+    base: { start: result.selection.start, end: result.selection.end },
+  }, result.newTotal);
+  return true;
+}
+
 function computeDurationEdit(ctx: EditCtx, kind: 'duration' | 'dot', value: string): VoiceEditResult | null {
   if (ctx.multi) return null;                 // several voices at once: pick one voice first
   const staff = ctx.part;
@@ -702,24 +813,14 @@ function computeDurationEdit(ctx: EditCtx, kind: 'duration' | 'dot', value: stri
   const cells = buildCells(store.unprocessedNotes);
   const { start, end } = ctx.sel;
 
+  // Notes inside a tuplet change their written value in place; the tuplet's length and what follows move with it
+  if (ctx.notes.length && ctx.notes.every(note => note.tupletInfo)) return computeTupletMemberDuration(ctx, kind, value);
   // A tuplet touching the selection, even partly, blocks duration edits
   if (cells.some(cell => cell.isTuplet && cell.start < end - 1e-9 && cell.end > start + 1e-9)) return null;
   const selCells = selectedCellIndices(cells, start, end).map(index => cells[index]);
   if (!selCells.length) return null;
 
-  // Overwrite changes this voice only, Polyphony may also move the note into another voice, and Insert moves every voice
-  const run = (keyFor: KeyFor): VoiceEditResult | null => {
-    const result = insertMode
-      ? insertAcrossVoices(staff, store.id, cells, start, end, total, keyFor)
-      : polyphonyMode
-        ? polyphonyEdit(staff, store.id, start, end, total, keyFor)
-        : singleVoiceResult(overwriteEdit(cells, start, end, total, keyFor), store.id);
-    if (!result) return null;
-    for (const id of Object.keys(result.changes) as VoiceId[]) {
-      if (tupletCrossesBarline(result.changes[id]!, 0, Infinity)) return null;
-    }
-    return result;
-  };
+  const run = (keyFor: KeyFor): VoiceEditResult | null => runDurationMode(ctx, cells, keyFor);
 
   if (kind === 'dot') {
     const wantDot = !selCells.every(cell => (cellKey(cell) ?? '').endsWith('d'));
@@ -756,7 +857,10 @@ function commitVoiceEdits(
 function applyDurationEdit(ctx: EditCtx, kind: 'duration' | 'dot', value: string): void {
   if (ctx.multi) return;
   const result = computeDurationEdit(ctx, kind, value);
-  if (!result) return;
+  if (!result) {
+    if (blockedByBarline) alert(BARLINE_MESSAGE);
+    return;
+  }
   // a selection of "all voices" stays that way while the note stays in its voice
   const stays = (!ctx.sel.voice || ctx.sel.voice === 'all') && result.selection.voice === ctx.store.id;
   commitVoiceEdits(ctx.part, result.changes, {
@@ -780,7 +884,7 @@ function rewriteNotes(ctx: EditCtx, fn: (note: UnprocessedNote) => PitchSet | 'r
       const replacement = result === 'rest'
         ? makeRest(src.duration, src.dotted)
         : new UnprocessedNote(result.names, result.octaves, src.duration, src.dotted, src.tiedToNext);
-      if (src.tupletInfo) replacement.tupletInfo = { ...src.tupletInfo };
+      copyTuplets(src, replacement);
       if (result !== 'rest') replacement.articulations = [...src.articulations];
       notes[entry.index] = replacement;
       changed = true;
@@ -871,21 +975,107 @@ function handleEditClick(kind: EditKind, value: string): void {
 
 // Delete: cancels a pending pitch, removes the selected pitches, or makes the note a rest
 // Edit tab Delete: every selected note becomes rests, merged with the rests beside it. A tuplet goes whole.
+// Insert mode Delete: the selected notes (and rests) are taken out and what follows moves up to close the gap.
+// The other voices of the staff lose the same time, and rests at the end keep the voice's length.
+// Deleting inside a tuplet keeps the tuplet's length: a deleted note of it becomes a rest in its place.
+// Only a tuplet with every note selected goes whole.
+function tupletAwareDeletion(group: EditGroup): { source: UnprocessedNote[]; hit: Set<number>; replaced: boolean } {
+  const original = group.store.unprocessedNotes;
+  const selected = new Set<number>(group.entries.map(entry => entry.index));
+  const membersOf = new Map<number, number[]>();
+  original.forEach((note, index) => {
+    if (!note.tupletInfo) return;
+    const list = membersOf.get(note.tupletInfo.id) ?? [];
+    list.push(index);
+    membersOf.set(note.tupletInfo.id, list);
+  });
+
+  let source = original;
+  let replaced = false;
+  const hit = new Set<number>();
+  for (const index of selected) {
+    const note = original[index];
+    if (!note.tupletInfo || membersOf.get(note.tupletInfo.id)!.every(member => selected.has(member))) { hit.add(index); continue; }
+    if (note.isRest) continue;
+    if (source === original) source = cloneNotes(original);
+    const rest = makeRest(note.duration, note.dotted);
+    copyTuplets(note, rest);
+    source[index] = rest;
+    replaced = true;
+  }
+  return { source, hit, replaced };
+}
+
+function deleteByInsert(ctx: EditCtx): void {
+  const changes: Partial<Record<VoiceId, UnprocessedNote[]>> = {};
+
+  for (const group of ctx.groups) {
+    const { source, hit, replaced } = tupletAwareDeletion(group);
+
+    const kept: UnprocessedNote[] = [];
+    source.forEach((note, index) => {
+      if (hit.has(index)) { if (kept.length) kept[kept.length - 1] = withoutTie(kept[kept.length - 1]); return; }
+      kept.push(note);
+    });
+
+    // the removed stretches of time
+    const ranges: { start: number; end: number }[] = [];
+    for (const entry of group.entries.filter(item => hit.has(item.index))) {
+      const end = round(entry.start + entry.dur);
+      const last = ranges[ranges.length - 1];
+      if (last && Math.abs(last.end - entry.start) < 1e-9) last.end = end;
+      else ranges.push({ start: entry.start, end });
+    }
+    const removed = round(ranges.reduce((sum, range) => sum + (range.end - range.start), 0));
+
+    if (!hit.size && !replaced) continue;
+    const had = notesDuration(source);
+    const result = [...cloneNotes(kept), ...fillDurationWithRests(removed, round(had - removed))];
+    reindexTuplets(result);
+    if (tupletCrossesBarline(result, 0, Infinity)) return;
+    changes[group.store.id] = result;
+
+    // with one voice selected, the other voices of the staff lose the same time so they stay in step
+    if (!ctx.multi) {
+      for (const voice of staffVoices(ctx.part)) {
+        if (voice.id === group.store.id) continue;
+        let cells: Cell[] | null = buildCells(voice.unprocessedNotes);
+        for (const range of [...ranges].reverse()) {
+          cells = cells && shiftCellsAt(cells, range.end, -(range.end - range.start));
+          if (!cells) return;
+        }
+        changes[voice.id] = cells.flatMap(cell => cell.notes);
+      }
+    }
+  }
+  if (Object.keys(changes).length) commitVoiceEdits(ctx.part, changes, null, null);
+}
+
+function withoutTie(note: UnprocessedNote): UnprocessedNote {
+  if (!note.tiedToNext) return note;
+  const copy = cloneNotes([note])[0];
+  copy.tiedToNext = false;
+  copy.articulations = [...note.articulations];
+  return copy;
+}
+
 function deleteSelectedToRests(ctx: EditCtx): void {
+  if (insertMode) { deleteByInsert(ctx); return; }
   const changes: Partial<Record<VoiceId, UnprocessedNote[]>> = {};
   for (const group of ctx.groups) {
-    const src = group.store.unprocessedNotes;
-    const hit = new Set<number>(group.entries.map(entry => entry.index));
+    const { source: src, hit, replaced } = tupletAwareDeletion(group);
     const out: UnprocessedNote[] = [];
     const fresh: boolean[] = [];
     let pos = 0;
-    let changed = false;
+    let changed = replaced;
     for (let itemIndex = 0; itemIndex < src.length;) {
       const note = src[itemIndex];
       if (note.tupletInfo) {
         let runEnd = itemIndex;
         while (runEnd < src.length - 1 && src[runEnd].tupletInfo && src[runEnd].tupletInfo!.index !== src[runEnd].tupletInfo!.count) runEnd++;
-        const total = src[runEnd].tupletInfo!.totalTupletDuration;
+        let total = 0;
+        for (let runIndex = itemIndex; runIndex <= runEnd; runIndex++) total += getRealDuration(src[runIndex]);
+        total = round(total);
         let any = false;
         for (let runIndex = itemIndex; runIndex <= runEnd; runIndex++) if (hit.has(runIndex)) any = true;
         if (any) {
@@ -922,7 +1112,7 @@ function deleteAtSelection(): void {
     const session = ensureSession(ctx);
     if (session.pending) { session.pending = null; scheduleEditRefresh(); return; }
     const note = firstPitched(ctx);
-    if (!note) return;
+    if (!note) { deleteSelectedToRests(ctx); return; }   // a rest: Insert takes its time out, Overwrite leaves it
 
     const keys = notePitchKeys(note);
     if (keys.length <= 1 || !session.selected) { deleteSelectedToRests(ctx); return; }
@@ -985,6 +1175,10 @@ function buildEditMenu(): void {
     label: option.symbol, kind: 'duration' as EditKind, value: DURATION_KEYS[option.id],
   })));
   addRow('Dot', [{ label: '\u00B7', kind: 'dot', value: 'dot' }]);
+  buildTieMenu(host);
+  buildSlurMenu(host);
+  buildGraceMenu(host);
+  buildTupletMenu(host);
 }
 
 function scheduleEditRefresh(): void {
@@ -1024,6 +1218,7 @@ function refreshEditMenu(): void {
     voiceRow.appendChild(button);
   }
 
+  refreshTupletMenu(ctx);
   if (!ctx) {
     buttons.forEach(button => { button.classList.remove('active'); button.disabled = true; });
     return;
@@ -1334,4 +1529,784 @@ function handleArrowKey(event: KeyboardEvent): boolean {
     movePitchOfSelection(ctx, step, event.key === 'ArrowUp' ? 1 : -1);
   }
   return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Tuplets by hand (Edit tab): make a tuplet of the selection, join or split the notes inside one, or turn one back
+// into ordinary notes. A tuplet inside a tuplet is made by selecting notes inside the first one and making another.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// this many notes in the time of that many
+const TUPLET_CHOICES: [number, number][] = [[3, 2], [2, 3], [4, 3], [3, 4], [5, 4], [6, 4], [7, 4], [9, 8], [7, 8]];
+
+let newTupletIdCounter = 1000000;   // a number no existing tuplet has; commit renumbers them all
+
+// A note's value as the key durationMapping uses: "8d" is a dotted eighth
+function noteKeyOf(note: UnprocessedNote): string {
+  return note.dotted ? note.duration + 'd' : note.duration;
+}
+
+// A new note of value `key`: the pitches of `source` (a rest if it has none)
+function noteOfKey(key: string, source: UnprocessedNote | null): UnprocessedNote {
+  const duration = key.replace(/d$/, '');
+  const dotted = key.endsWith('d');
+  if (!source || source.isRest) return makeRest(duration, dotted);
+  const note = new UnprocessedNote([...source.noteName], [...source.octaves], duration, dotted);
+  note.articulations = [...source.articulations];
+  return note;
+}
+
+function levelIds(note: UnprocessedNote): string {
+  return tupletLevels(note).map(level => level.id).join(',');
+}
+
+// Numbers each tuplet's notes 1..n again and sets how many it has, after notes were put in or taken out.
+// A tuplet is a run of notes that carry the same id at the same depth.
+function reindexTuplets(notes: UnprocessedNote[]): void {
+  const open: { id: number; members: TupletInfo[] }[] = [];
+  const close = (fromDepth: number) => {
+    while (open.length > fromDepth) {
+      const group = open.pop()!;
+      group.members.forEach((member, position) => { member.index = position + 1; member.count = group.members.length; });
+    }
+  };
+  for (const note of notes) {
+    const levels = tupletLevels(note);
+    let depth = 0;
+    while (depth < open.length && depth < levels.length && open[depth].id === levels[depth].id) depth++;
+    close(depth);
+    for (let level = depth; level < levels.length; level++) open.push({ id: levels[level].id, members: [] });
+    levels.forEach((level, at) => open[at].members.push(level));
+  }
+  close(0);
+  refreshTupletTotals(notes);
+}
+
+interface TupletPlan {
+  notes: UnprocessedNote[];       // the voice's notes after the change
+  start: number;                  // the span to keep selected
+  end: number;
+}
+
+// The voice the selection is in, its notes, and where the selected run is (null if several voices or nothing)
+function tupletRun(ctx: EditCtx): { notes: UnprocessedNote[]; first: number; last: number } | null {
+  if (ctx.multi || ctx.groups.length !== 1) return null;
+  const indexes = ctx.groups[0].entries.map(entry => entry.index);
+  if (!indexes.length) return null;
+  return { notes: ctx.store.unprocessedNotes, first: Math.min(...indexes), last: Math.max(...indexes) };
+}
+
+function finishPlan(before: UnprocessedNote[], middle: UnprocessedNote[], after: UnprocessedNote[], start: number, end: number): TupletPlan | null {
+  const notes = cloneNotes([...before, ...middle, ...after]);   // copies, so checking a plan never disturbs the live notes
+  reindexTuplets(notes);
+  if (tupletCrossesBarline(notes, 0, Infinity)) return null;
+  return { notes, start, end };
+}
+
+// The selection becomes `count` notes in the time of `occupied`
+function planMakeTuplet(ctx: EditCtx, count: number, occupied: number): TupletPlan | null {
+  const run = tupletRun(ctx);
+  if (!run) return null;
+  const { notes, first, last } = run;
+  const selected = notes.slice(first, last + 1);
+
+  let slot: UnprocessedNote[];                 // what the new tuplet's notes take their pitches from
+  let nominal: number;                         // the written length of the whole selection
+  let before: UnprocessedNote[];
+  let after: UnprocessedNote[];
+  let levels: TupletInfo[];                    // the tuplets the selection is already in
+  let sourceNote: UnprocessedNote | null = null;
+
+  if (selected.every(note => note.tupletInfo)) {
+    // inside a tuplet: the new one nests in it, so all the notes must be in the same tuplets
+    if (selected.some(note => levelIds(note) !== levelIds(selected[0]))) return null;
+    slot = selected;
+    nominal = round(selected.reduce((sum, note) => sum + getNoteDuration(note), 0));
+    before = notes.slice(0, first);
+    after = notes.slice(last + 1);
+    levels = tupletLevels(selected[0]);
+    sourceNote = selected[0];
+  } else if (selected.some(note => note.tupletInfo)) {
+    return null;
+  } else {
+    const cells = buildCells(notes);
+    const picked = selectedCellIndices(cells, ctx.sel.start, ctx.sel.end).map(index => cells[index]);
+    if (!picked.length || picked.some(cell => cell.isTuplet)) return null;
+    const firstNote = picked[0].notes[0];
+    const lastNote = picked[picked.length - 1].notes[picked[picked.length - 1].notes.length - 1];
+    before = notes.slice(0, notes.indexOf(firstNote));
+    after = notes.slice(notes.indexOf(lastNote) + 1);
+    slot = picked.map(cell => cell.notes[0]);
+    nominal = round(picked[picked.length - 1].end - picked[0].start);
+    levels = [];
+  }
+
+  const key = getDurationKeyFromValue(round(nominal / occupied));
+  if (!key) return null;
+
+  const id = ++newTupletIdCounter;
+  const middle: UnprocessedNote[] = [];
+  for (let position = 0; position < count; position++) {
+    const note = noteOfKey(key, slot[position] ?? null);
+    const fresh: TupletInfo = { id, totalTupletDuration: 0, ratio: [count, occupied], count, index: position + 1 };
+    if (levels.length) {
+      const parent = selected[0];
+      note.tupletInfo = { ...parent.tupletInfo!, ratio: [...parent.tupletInfo!.ratio] as [number, number] };
+      note.innerTuplets = [...parent.innerTuplets.map(level => ({ ...level, ratio: [...level.ratio] as [number, number] })), fresh];
+    } else {
+      note.tupletInfo = fresh;
+    }
+    middle.push(note);
+  }
+  void sourceNote;
+
+  const span = levels.length
+    ? { start: ctx.sel.start, end: ctx.sel.end }
+    : (() => { const cells = buildCells(notes); const picked = selectedCellIndices(cells, ctx.sel.start, ctx.sel.end).map(index => cells[index]); return { start: picked[0].start, end: picked[picked.length - 1].end }; })();
+  return finishPlan(before, middle, after, span.start, span.end);
+}
+
+// The notes of the tuplet (at its deepest level) that `note` belongs to, as indexes into `notes`
+function deepestGroupRange(notes: UnprocessedNote[], at: number): { first: number; last: number; depth: number } | null {
+  const levels = tupletLevels(notes[at]);
+  if (!levels.length) return null;
+  const depth = levels.length - 1;
+  const id = levels[depth].id;
+  const belongs = (index: number) => tupletLevels(notes[index])[depth]?.id === id;
+  let first = at;
+  let last = at;
+  while (first > 0 && belongs(first - 1)) first--;
+  while (last < notes.length - 1 && belongs(last + 1)) last++;
+  return { first, last, depth };
+}
+
+// Several notes of one tuplet become one note; all the notes of a tuplet become one ordinary note (the tuplet is gone)
+function planJoin(ctx: EditCtx, wholeGroup: boolean): TupletPlan | null {
+  const run = tupletRun(ctx);
+  if (!run) return null;
+  const { notes } = run;
+  let { first, last } = run;
+
+  if (wholeGroup) {
+    const range = deepestGroupRange(notes, first);
+    if (!range) return null;
+    first = range.first;
+    last = range.last;
+  } else if (last <= first) {
+    return null;
+  }
+  const members = notes.slice(first, last + 1);
+  if (members.some(note => !note.tupletInfo) || members.some(note => levelIds(note) !== levelIds(members[0]))) return null;
+
+  const levels = tupletLevels(members[0]);
+  const deepest = levels[levels.length - 1];
+  const wholeDeepest = members.length === deepest.count;
+  let nominal = round(members.reduce((sum, note) => sum + getNoteDuration(note), 0));
+  if (wholeDeepest) nominal = round(nominal * deepest.ratio[1] / deepest.ratio[0]);   // the group becomes a plain note of the time it took
+  const key = getDurationKeyFromValue(nominal);
+  if (!key) return null;
+
+  const source = members.find(note => !note.isRest) ?? null;
+  const joined = noteOfKey(key, source);
+  copyTuplets(members[0], joined);
+  if (wholeDeepest) {
+    if (joined.innerTuplets.length) joined.innerTuplets.pop();
+    else joined.tupletInfo = null;
+  }
+
+  const start = timelineStartOf(notes, first);
+  const span = round(members.reduce((sum, note) => sum + getRealDuration(note), 0));
+  return finishPlan(notes.slice(0, first), [joined], notes.slice(last + 1), start, round(start + span));
+}
+
+function timelineStartOf(notes: UnprocessedNote[], index: number): number {
+  return getUnprocessedTimeline(notes)[index].start;
+}
+
+function applyTupletPlan(ctx: EditCtx, plan: TupletPlan | null): void {
+  if (!plan) return;
+  commitVoiceEdits(ctx.part, { [ctx.store.id]: plan.notes }, {
+    start: plan.start, end: plan.end, voice: ctx.sel.voice, base: { start: plan.start, end: plan.end },
+  }, null);
+}
+
+function selectedTupletChoice(): [number, number] {
+  const select = document.getElementById('tupletRatio') as HTMLSelectElement | null;
+  const [count, occupied] = (select?.value ?? '3:2').split(':').map(Number);
+  return [count, occupied];
+}
+
+function buildTupletMenu(host: HTMLElement): void {
+  const heading = document.createElement('div');
+  heading.className = 'buttonDescription';
+  heading.textContent = 'Tuplet';
+  host.appendChild(heading);
+
+  const choiceRow = document.createElement('div');
+  choiceRow.className = 'row';
+  const select = document.createElement('select');
+  select.id = 'tupletRatio';
+  for (const [count, occupied] of TUPLET_CHOICES) {
+    const option = document.createElement('option');
+    option.value = `${count}:${occupied}`;
+    option.textContent = `${count}:${occupied}`;
+    select.appendChild(option);
+  }
+  select.addEventListener('change', () => { select.blur(); scheduleEditRefresh(); });
+  choiceRow.appendChild(select);
+  host.appendChild(choiceRow);
+
+  const addButtons = (buttons: { id: string; label: string; title: string; run: (ctx: EditCtx) => void }[]) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    for (const button of buttons) {
+      const el = document.createElement('button');
+      el.className = 'tupletBtn';
+      el.id = button.id;
+      el.textContent = button.label;
+      el.title = button.title;
+      el.disabled = true;
+      el.addEventListener('click', () => { const ctx = getEditContext(); if (ctx) button.run(ctx); el.blur(); });
+      row.appendChild(el);
+    }
+    host.appendChild(row);
+  };
+  addButtons([
+    { id: 'tupletMake',  label: 'Tuplet',   title: 'Make the selection a tuplet (inside a tuplet: one nested in it)', run: ctx => { const [count, occupied] = selectedTupletChoice(); applyTupletPlan(ctx, planMakeTuplet(ctx, count, occupied)); } },
+    { id: 'tupletUndo',  label: 'Untuplet', title: 'Turn the tuplet back into an ordinary note',                     run: ctx => applyTupletPlan(ctx, planJoin(ctx, true)) },
+  ]);
+}
+
+function refreshTupletMenu(ctx: EditCtx | null): void {
+  refreshTieMenu(ctx);
+  refreshSlurMenu(ctx);
+  refreshGraceMenu(ctx);
+  const set = (id: string, enabled: boolean) => {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) button.disabled = !enabled;
+  };
+  if (!ctx) { ['tupletMake', 'tupletUndo'].forEach(id => set(id, false)); return; }
+  const [count, occupied] = selectedTupletChoice();
+  set('tupletMake', planMakeTuplet(ctx, count, occupied) !== null);
+  set('tupletUndo', planJoin(ctx, true) !== null);
+}
+
+// Duration / dot buttons on notes inside a tuplet. The tuplet keeps its length, so the other notes of its group are
+// overwritten (or pushed, in Insert mode); a note that runs past the end of the tuplet carries on as tied notes after
+// it (an outermost tuplet only). Time a pushed note would need beyond the tuplet is lost.
+interface TupletUnit { notes: UnprocessedNote[]; length: number; plain: boolean; }
+interface TupletItem { position: number; length: number; notes: UnprocessedNote[]; plain: boolean; selected: boolean; tail?: boolean; }
+
+function computeTupletMemberDuration(ctx: EditCtx, kind: 'duration' | 'dot', value: string): VoiceEditResult | null {
+  const run = tupletRun(ctx);
+  if (!run) return null;
+  const notes = ctx.store.unprocessedNotes;
+  const range = deepestGroupRange(notes, run.first);
+  if (!range || run.last > range.last) return null;
+  const depth = range.depth;
+  const selected = notes.slice(run.first, run.last + 1);
+  if (selected.some(note => tupletLevels(note).length !== depth + 1 || levelIds(note) !== levelIds(selected[0]))) return null;
+  const levelTemplate = selected[0];
+  const levels = tupletLevels(levelTemplate);
+  let scale = 1;                                  // real time per unit of written value inside this group
+  for (let level = 0; level <= depth; level++) scale *= levels[level].ratio[1] / levels[level].ratio[0];
+
+  // the group as units: single notes, or whole nested tuplets
+  const units: TupletUnit[] = [];
+  for (let at = range.first; at <= range.last; ) {
+    const note = notes[at];
+    if (tupletLevels(note).length === depth + 1) { units.push({ notes: [note], length: getNoteDuration(note), plain: true }); at++; continue; }
+    const innerId = tupletLevels(note)[depth + 1].id;
+    const inner: UnprocessedNote[] = [];
+    let sum = 0;
+    while (at <= range.last && tupletLevels(notes[at])[depth + 1]?.id === innerId) { inner.push(notes[at]); sum += getRealDuration(notes[at]); at++; }
+    units.push({ notes: inner, length: round(sum / scale), plain: false });
+  }
+  const groupLength = round(units.reduce((sum, unit) => sum + unit.length, 0));
+  const oldPosition: number[] = [];
+  let walk = 0;
+  for (const unit of units) { oldPosition.push(walk); walk = round(walk + unit.length); }
+
+  const firstUnit = units.findIndex(unit => unit.notes[0] === selected[0]);
+  const lastUnit = firstUnit + selected.length - 1;
+  if (firstUnit < 0 || lastUnit >= units.length) return null;
+  for (let offset = 0; offset < selected.length; offset++) {
+    if (!units[firstUnit + offset].plain || units[firstUnit + offset].notes[0] !== selected[offset]) return null;
+  }
+
+  const wantDot = kind === 'dot' ? !selected.every(note => note.dotted) : false;
+  const newKeys: string[] = [];
+  for (const old of selected) {
+    const base = old.duration.replace(/d$/, '');
+    const key = kind === 'dot' ? base + (wantDot ? 'd' : '') : value + (old.dotted ? 'd' : '');
+    if (durationMapping[key] !== undefined) newKeys.push(key);
+    else if (kind === 'duration' && durationMapping[value] !== undefined) newKeys.push(value);
+    else return null;
+  }
+
+  // a length of written value as notes of the group (tied if it has a pitch); null when it can't be written
+  const piecesFor = (length: number, template: UnprocessedNote, keepArticulations: boolean): UnprocessedNote[] | null => {
+    const pieces = fillDurationAsUnprocessed(length, template);
+    const written = round(pieces.reduce((sum, piece) => sum + getNoteDuration(piece), 0));
+    if (!pieces.length || Math.abs(written - length) > 1e-9) return null;
+    if (!keepArticulations) pieces.forEach(piece => { piece.articulations = []; });
+    pieces.forEach(piece => copyTuplets(levelTemplate, piece));
+    return pieces;
+  };
+  const restTemplate = makeRest('q');
+
+  const items: TupletItem[] = [];
+  const addUnit = (unit: TupletUnit, position: number) => items.push({ position, length: unit.length, notes: unit.notes, plain: unit.plain, selected: false });
+  for (let at = 0; at < firstUnit; at++) addUnit(units[at], oldPosition[at]);
+
+  let cursor = oldPosition[firstUnit];
+  selected.forEach((old, offset) => {
+    const fresh = noteOfKey(newKeys[offset], old);
+    copyTuplets(old, fresh);
+    fresh.tiedToNext = old.tiedToNext && !old.isRest;
+    const length = durationMapping[newKeys[offset]];
+    items.push({ position: cursor, length, notes: [fresh], plain: true, selected: true });
+    cursor = round(cursor + length);
+  });
+  const newEnd = cursor;
+
+  for (let at = lastUnit + 1; at < units.length; at++) {
+    const unit = units[at];
+    const unitStart = oldPosition[at];
+    const unitEnd = round(unitStart + unit.length);
+    if (insertMode) {                              // pushed along
+      addUnit(unit, cursor);
+      cursor = round(cursor + unit.length);
+      continue;
+    }
+    if (unitEnd <= newEnd + 1e-9) continue;        // overwritten
+    if (unitStart < newEnd - 1e-9) {               // cut: what is left of it
+      if (!unit.plain) return null;
+      const rest = piecesFor(round(unitEnd - newEnd), unit.notes[0], false);
+      if (!rest) return null;
+      items.push({ position: newEnd, length: round(unitEnd - newEnd), notes: rest, plain: true, selected: false });
+      cursor = unitEnd;
+      continue;
+    }
+    if (unitStart > cursor + 1e-9) {               // time the note gave up
+      const gap = piecesFor(round(unitStart - cursor), restTemplate, false);
+      if (!gap) return null;
+      items.push({ position: cursor, length: round(unitStart - cursor), notes: gap, plain: true, selected: false });
+    }
+    addUnit(unit, unitStart);
+    cursor = unitEnd;
+  }
+
+  // keep to the length of the tuplet; what runs past its end leaves it (an outermost tuplet only)
+  const kept: TupletItem[] = [];
+  const leaving: TupletItem[] = [];
+  for (const item of items) {
+    const end = round(item.position + item.length);
+    if (end <= groupLength + 1e-9) { kept.push(item); continue; }
+    if (item.position >= groupLength - 1e-9 || !item.plain) { leaving.push(item); continue; }   // a nested tuplet moves out whole
+    // a note across the end of the tuplet: the part inside stays, tied to the part outside
+    const template = item.notes[0];
+    const inside = piecesFor(round(groupLength - item.position), template, item.selected);
+    if (!inside) return null;
+    if (!template.isRest) inside[inside.length - 1].tiedToNext = true;
+    kept.push({ ...item, length: round(groupLength - item.position), notes: inside });
+    leaving.push({ position: groupLength, length: round(end - groupLength), notes: [template], plain: true, selected: false, tail: true });
+  }
+  const keptEnd = kept.length ? round(kept[kept.length - 1].position + kept[kept.length - 1].length) : 0;
+  if (keptEnd < groupLength - 1e-9) {
+    const pad = piecesFor(round(groupLength - keptEnd), restTemplate, false);
+    if (!pad) return null;
+    kept.push({ position: keptEnd, length: round(groupLength - keptEnd), notes: pad, plain: true, selected: false });
+  }
+  if (!kept.some(item => item.selected)) return null;
+  if (depth > 0) leaving.length = 0;               // a nested tuplet can't run past its own group
+  if (leaving.every(item => item.notes.every(note => note.isRest))) leaving.length = 0;   // only silence would be pushed out: it just goes
+
+  const groupNotes = kept.flatMap(item => item.notes);
+  let finalNotes = cloneNotes([...notes.slice(0, range.first), ...groupNotes, ...notes.slice(range.last + 1)]);
+  const selectedFirst = range.first + kept.filter(item => item.position < oldPosition[firstUnit] + 1e-9 && !item.selected).reduce((sum, item) => sum + item.notes.length, 0);
+  const selectedCount = kept.filter(item => item.selected).reduce((sum, item) => sum + item.notes.length, 0);
+  const lastGroupIndex = range.first + groupNotes.length - 1;
+
+  const changes: Partial<Record<VoiceId, UnprocessedNote[]>> = {};
+  if (leaving.length) {
+    const realTotal = round(leaving.reduce((sum, item) => sum + item.length, 0) * scale);
+
+    // Out of the tuplet as ordinary notes when every one can be written at its real length...
+    let outside: UnprocessedNote[] | null = [];
+    for (const item of leaving) {
+      if (!item.plain) { outside = null; break; }
+      const real = round(item.length * scale);
+      const source = item.notes[0];
+      const pieces = fillDurationAsUnprocessed(real, source);
+      const written = round(pieces.reduce((sum, piece) => sum + getNoteDuration(piece), 0));
+      if (!pieces.length || Math.abs(written - real) > 1e-9) { outside = null; break; }
+      if (item.tail) pieces.forEach(piece => { piece.articulations = []; });
+      pieces[pieces.length - 1].tiedToNext = item.notes[item.notes.length - 1].tiedToNext && !source.isRest;
+      outside.push(...pieces);
+    }
+    // ...otherwise they stay tuplet notes, in a second tuplet of the same ratio that follows (Insert mode only)
+    if (!outside) {
+      if (!insertMode) return null;
+      const followingId = ++newTupletIdCounter;
+      const carried: UnprocessedNote[] = [];
+      for (const item of leaving) {
+        const pieces = item.tail ? piecesFor(item.length, item.notes[0], false) : item.notes;
+        if (!pieces) return null;
+        carried.push(...pieces);
+      }
+      outside = cloneNotes(carried);
+      outside.forEach(note => { note.tupletInfo = { ...note.tupletInfo!, id: followingId }; });
+    }
+
+    if (insertMode) {
+      finalNotes = [...finalNotes.slice(0, lastGroupIndex + 1), ...outside, ...finalNotes.slice(lastGroupIndex + 1)];   // everything after moves along
+    } else {
+      reindexTuplets(finalNotes);
+      const timeline = getUnprocessedTimeline(finalNotes);
+      const groupEnd = round(timeline[lastGroupIndex].start + timeline[lastGroupIndex].dur);
+      const painted = paint(buildCells(finalNotes), groupEnd, round(groupEnd + realTotal), outside, true);
+      if (!painted) return null;
+      finalNotes = painted.flatMap(cell => cell.notes);
+    }
+
+    if (insertMode) {
+      reindexTuplets(finalNotes);
+      const timeline = getUnprocessedTimeline(finalNotes);
+      const groupEnd = round(timeline[lastGroupIndex].start + timeline[lastGroupIndex].dur);
+      for (const voice of staffVoices(ctx.part)) {
+        if (voice.id === ctx.store.id) continue;
+        const shiftedVoice = shiftCellsAt(buildCells(voice.unprocessedNotes), groupEnd, realTotal);
+        if (!shiftedVoice) return null;
+        changes[voice.id] = shiftedVoice.flatMap(cell => cell.notes);
+      }
+    }
+  }
+
+  reindexTuplets(finalNotes);
+  if (tupletCrossesBarline(finalNotes, 0, Infinity)) return null;
+  const timeline = getUnprocessedTimeline(finalNotes);
+  const start = timeline[selectedFirst].start;
+  const last = timeline[selectedFirst + selectedCount - 1];
+  const end = round(last.start + last.dur);
+  changes[ctx.store.id] = finalNotes;
+  return {
+    changes,
+    selection: { start, end, voice: ctx.sel.voice, base: { start, end } },
+    newTotal: notesDuration(finalNotes),
+  };
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Tie button: ties each selected note to the note after it when that is the same pitch (again to untie)
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Per voice, the indexes of selected notes whose next note has the same pitches
+function tieCandidates(ctx: EditCtx): { store: EditGroup['store']; indexes: number[] }[] {
+  const found: { store: EditGroup['store']; indexes: number[] }[] = [];
+  for (const group of ctx.groups) {
+    const notes = group.store.unprocessedNotes;
+    const indexes = group.entries.map(entry => entry.index).filter(index => {
+      const note = notes[index];
+      const next = notes[index + 1];
+      return !!next && !note.isRest && !next.isRest && samePitches(note, next);
+    });
+    if (indexes.length) found.push({ store: group.store, indexes });
+  }
+  return found;
+}
+
+// Two same-pitch notes written as one note when a single note value does it and it sits properly in the bar;
+// null when they have to stay two tied notes (a note across the barline or a beat group, a length with no single value)
+function mergeTiedNotes(run: UnprocessedNote[], start: number): UnprocessedNote | null {
+  const first = run[0];
+  const second = run[run.length - 1];
+  const sum = round(run.reduce((total, note) => total + getNoteDuration(note), 0));
+  const key = getDurationKeyFromValue(sum);
+  if (!key) return null;
+
+  if (run.some(note => note.tupletInfo)) {
+    if (run.some(note => !note.tupletInfo || levelIds(note) !== levelIds(first))) return null;
+  } else {
+    const bar = measureIndexAt(start);
+    const into = round(start - measureStartOf(bar));
+    const end = round(into + sum);
+    if (end > measureLenOf(bar) + 1e-9) return null;
+    const unit = key.endsWith('d') ? sum * 4 / 3 : sum;
+    if (Math.abs(into / unit - Math.round(into / unit)) > 1e-6) return null;
+    const cuts = groupCuts(bar);
+    const atCut = (position: number) => cuts.some(cut => Math.abs(cut - position) < 1e-9);
+    const wholeMeasure = into < 1e-9 && Math.abs(end - cuts[cuts.length - 1]) < 1e-9;
+    const insideOneGroup = cuts.some((cut, at) => at < cuts.length - 1 && into >= cut - 1e-9 && end <= cuts[at + 1] + 1e-9);
+    if (!(wholeMeasure || insideOneGroup || (atCut(into) && atCut(end)))) return null;
+  }
+
+  const merged = noteOfKey(key, first);
+  merged.articulations = [...first.articulations];
+  copyTuplets(first, merged);
+  merged.tiedToNext = second.tiedToNext;
+  return merged;
+}
+
+function applyTie(ctx: EditCtx): void {
+  const found = tieCandidates(ctx);
+  if (!found.length) return;
+  const allTied = found.every(entry => entry.indexes.every(index => entry.store.unprocessedNotes[index].tiedToNext));
+  const changes: Partial<Record<VoiceId, UnprocessedNote[]>> = {};
+  for (const entry of found) {
+    const original = entry.store.unprocessedNotes;
+    if (allTied) {                                   // untie
+      const notes = cloneNotes(original);
+      entry.indexes.forEach(index => { notes[index].tiedToNext = false; });
+      changes[entry.store.id] = notes;
+      continue;
+    }
+    // tie: write each pair as one note where that is how it would normally be written
+    const chosen = new Set(entry.indexes);
+    const timeline = getUnprocessedTimeline(original);
+    const out: UnprocessedNote[] = [];
+    for (let at = 0; at < original.length; ) {
+      let links = 0;                                  // tie links in a row starting at this note
+      while (chosen.has(at + links)) links++;
+      let merged: UnprocessedNote | null = null;
+      let used = 0;
+      for (let count = links; count >= 1 && !merged; count--) {   // as many notes as will make one note, else fewer
+        merged = mergeTiedNotes(original.slice(at, at + count + 1), timeline[at].start);
+        used = count;
+      }
+      if (merged) {
+        merged.tiedToNext = chosen.has(at + used) || original[at + used].tiedToNext;
+        out.push(merged);
+        at += used + 1;
+        continue;
+      }
+      const note = cloneNotes([original[at]])[0];
+      note.tiedToNext = chosen.has(at) || note.tiedToNext;
+      out.push(note);
+      at++;
+    }
+    reindexTuplets(out);
+    changes[entry.store.id] = out;
+  }
+  commitVoiceEdits(ctx.part, changes, null, null);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Slurs and grace notes
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// One slur per voice in the selection, over the voice's selected notes
+function slurSpans(ctx: EditCtx): { voice: VoiceId; start: number; end: number }[] {
+  const spans: { voice: VoiceId; start: number; end: number }[] = [];
+  for (const group of ctx.groups) {
+    const pitched = group.entries.filter(entry => !group.store.unprocessedNotes[entry.index].isRest);
+    if (pitched.length < 2) continue;
+    spans.push({ voice: group.store.id, start: pitched[0].start, end: round(pitched[pitched.length - 1].start + pitched[pitched.length - 1].dur) });
+  }
+  return spans;
+}
+
+function sameSlur(mark: SlurMark, span: { voice: VoiceId; start: number; end: number }): boolean {
+  return mark.voice === span.voice && Math.abs(mark.start - span.start) < 1e-6 && Math.abs(mark.end - span.end) < 1e-6;
+}
+
+function applySlur(ctx: EditCtx): void {
+  const spans = slurSpans(ctx);
+  if (!spans.length) return;
+  const staff = ctx.part;
+  const allHave = spans.every(span => staff.slurs.some(mark => sameSlur(mark, span)));
+  staff.slurs = staff.slurs.filter(mark => !spans.some(span => sameSlur(mark, span)));
+  if (!allHave) for (const span of spans) staff.slurs.push({ ...span });
+  staff.slurs.sort((first, second) => first.start - second.start);
+  drawAllStaves();
+  updateMemory();
+}
+
+function buildSlurMenu(host: HTMLElement): void {
+  const heading = document.createElement('div');
+  heading.className = 'buttonDescription';
+  heading.textContent = 'Slur';
+  host.appendChild(heading);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const button = document.createElement('button');
+  button.className = 'tupletBtn';
+  button.id = 'slurBtn';
+  button.textContent = 'Slur';
+  button.title = 'Slur over the selected notes (again to remove)';
+  button.disabled = true;
+  button.addEventListener('click', () => { const ctx = getEditContext(); if (ctx) applySlur(ctx); button.blur(); });
+  row.appendChild(button);
+  host.appendChild(row);
+}
+
+function refreshSlurMenu(ctx: EditCtx | null): void {
+  const button = document.getElementById('slurBtn') as HTMLButtonElement | null;
+  if (!button) return;
+  const spans = ctx ? slurSpans(ctx) : [];
+  button.disabled = spans.length === 0;
+  button.classList.toggle('active', spans.length > 0 && spans.every(span => ctx!.part.slurs.some(mark => sameSlur(mark, span))));
+}
+
+const GRACE_LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const MAX_GRACE_NOTES = 4;
+
+// The notes of the selection that can take grace notes (pitched, and not the held part of a tied note)
+function graceTargets(ctx: EditCtx): { group: EditGroup; index: number; note: UnprocessedNote }[] {
+  const targets: { group: EditGroup; index: number; note: UnprocessedNote }[] = [];
+  for (const group of ctx.groups) {
+    const notes = group.store.unprocessedNotes;
+    for (const entry of group.entries) {
+      const note = notes[entry.index];
+      const previous = notes[entry.index - 1];
+      const continuesTie = !!previous && previous.tiedToNext && !previous.isRest && !note.tupletInfo && samePitches(previous, note);
+      if (!note.isRest && !continuesTie) targets.push({ group, index: entry.index, note });
+    }
+  }
+  return targets;
+}
+
+function applyGrace(ctx: EditCtx, action: 'add' | 'clear'): void {
+  const targets = graceTargets(ctx);
+  if (!targets.length) return;
+  const slash = (document.getElementById('graceType') as HTMLSelectElement | null)?.value !== 'appoggiatura';
+  const duration = (document.getElementById('graceValue') as HTMLSelectElement | null)?.value ?? '8';
+
+  const changes: Partial<Record<VoiceId, UnprocessedNote[]>> = {};
+  for (const group of ctx.groups) {
+    const notes = [...group.store.unprocessedNotes];
+    const timeline = getUnprocessedTimeline(group.store.unprocessedNotes);
+    let changed = false;
+    for (const target of targets.filter(candidate => candidate.group === group)) {
+      const copy = cloneNotes([target.note])[0];
+      if (action === 'clear') {
+        if (!copy.graceNotes.length) continue;
+        copy.graceNotes = [];
+      } else {
+        if (copy.graceNotes.length >= MAX_GRACE_NOTES) continue;
+        const letter = (document.getElementById('graceLetter') as HTMLSelectElement).value;
+        const chosen = (document.getElementById('graceAccidental') as HTMLSelectElement).value;
+        const accidental = chosen === 'n' ? '' : chosen;
+        const octave = parseInt((document.getElementById('graceOctave') as HTMLSelectElement).value, 10);
+        copy.graceNotes.push({ noteName: [letter + accidental], octaves: [octave], duration, slash });
+      }
+      notes[target.index] = copy;
+      changed = true;
+    }
+    if (changed) changes[group.store.id] = notes;
+  }
+  if (Object.keys(changes).length) commitVoiceEdits(ctx.part, changes, null, null);
+}
+
+function buildGraceMenu(host: HTMLElement): void {
+  const heading = document.createElement('div');
+  heading.className = 'buttonDescription';
+  heading.textContent = 'Grace note';
+  host.appendChild(heading);
+
+  const choiceRow = document.createElement('div');
+  choiceRow.className = 'row';
+  const makeSelect = (id: string, options: [string, string][]): void => {
+    const select = document.createElement('select');
+    select.id = id;
+    for (const [value, label] of options) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => select.blur());
+    choiceRow.appendChild(select);
+  };
+  makeSelect('graceType', [['acciaccatura', 'Acciaccatura'], ['appoggiatura', 'Appoggiatura']]);
+  makeSelect('graceValue', [['8', '\u266A'], ['16', '\u266C'], ['32', '32nd']]);
+  host.appendChild(choiceRow);
+
+  const pitchRow = document.createElement('div');
+  pitchRow.className = 'row';
+  const addPitchSelect = (id: string, options: [string, string][], selected: string): void => {
+    const select = document.createElement('select');
+    select.id = id;
+    for (const [value, label] of options) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+    select.value = selected;
+    select.addEventListener('change', () => select.blur());
+    pitchRow.appendChild(select);
+  };
+  addPitchSelect('graceLetter', ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map(letter => [letter, letter] as [string, string]), 'C');
+  addPitchSelect('graceAccidental', [['##', '\uD834\uDD2A'], ['#', '\u266F'], ['n', '\u266E'], ['b', '\u266D'], ['bb', '\uD834\uDD2B']], 'n');
+  addPitchSelect('graceOctave', [0, 1, 2, 3, 4, 5, 6, 7, 8].map(octave => [String(octave), String(octave)] as [string, string]), '5');
+  host.appendChild(pitchRow);
+
+  const row = document.createElement('div');
+  row.className = 'row';
+  const buttons: { id: string; label: string; title: string; action: 'add' | 'clear' }[] = [
+    { id: 'graceAdd',   label: 'Add',   title: 'Add this grace note before the selected notes', action: 'add' },
+    { id: 'graceClear', label: 'Clear', title: 'Remove the grace notes of the selected notes',  action: 'clear' },
+  ];
+  for (const definition of buttons) {
+    const button = document.createElement('button');
+    button.className = 'tupletBtn';
+    button.id = definition.id;
+    button.textContent = definition.label;
+    button.title = definition.title;
+    button.disabled = true;
+    button.addEventListener('click', () => { const ctx = getEditContext(); if (ctx) applyGrace(ctx, definition.action); button.blur(); });
+    row.appendChild(button);
+  }
+  host.appendChild(row);
+}
+
+let lastGraceDefault = '';
+
+function refreshGraceMenu(ctx: EditCtx | null): void {
+  const targets = ctx ? graceTargets(ctx) : [];
+  const add = document.getElementById('graceAdd') as HTMLButtonElement | null;
+  if (add) add.disabled = targets.length === 0;
+  const clear = document.getElementById('graceClear') as HTMLButtonElement | null;
+  if (clear) clear.disabled = !targets.some(target => target.note.graceNotes.length > 0);
+
+  // when a different note is selected, the pitch boxes start on that note's pitch
+  if (targets.length) {
+    const note = targets[0].note;
+    const top = note.noteName.length - 1;
+    const signature = `${targets[0].index}:${note.noteName[top]}${note.octaves[top]}`;
+    if (signature !== lastGraceDefault) {
+      lastGraceDefault = signature;
+      const { letter, acc } = parsePitchName(note.noteName[top]);
+      (document.getElementById('graceLetter') as HTMLSelectElement).value = letter;
+      (document.getElementById('graceAccidental') as HTMLSelectElement).value = acc === '' ? 'n' : acc;
+      (document.getElementById('graceOctave') as HTMLSelectElement).value = String(Math.max(0, Math.min(8, note.octaves[top])));
+    }
+  }
+}
+
+function buildTieMenu(host: HTMLElement): void {
+  const heading = document.createElement('div');
+  heading.className = 'buttonDescription';
+  heading.textContent = 'Tie';
+  host.appendChild(heading);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const button = document.createElement('button');
+  button.className = 'tupletBtn';
+  button.id = 'tieBtn';
+  button.textContent = 'Tie';
+  button.title = 'Tie the selected note to the next note if it is the same pitch';
+  button.disabled = true;
+  button.addEventListener('click', () => { const ctx = getEditContext(); if (ctx) applyTie(ctx); button.blur(); });
+  row.appendChild(button);
+  host.appendChild(row);
+}
+
+function refreshTieMenu(ctx: EditCtx | null): void {
+  const button = document.getElementById('tieBtn') as HTMLButtonElement | null;
+  if (!button) return;
+  const found = ctx ? tieCandidates(ctx) : [];
+  button.disabled = found.length === 0;
+  button.classList.toggle('active', found.length > 0 && found.every(entry => entry.indexes.every(index => entry.store.unprocessedNotes[index].tiedToNext)));
 }

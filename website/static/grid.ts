@@ -617,7 +617,7 @@ function getNoteUnits(staff: NoteStore): NoteUnit[] {
       while (itemIndex < notes.length) {
         const info = notes[itemIndex].tupletInfo!;
         group.push(notes[itemIndex]);
-        total = info.totalTupletDuration;
+        total += getRealDuration(notes[itemIndex]);
         itemIndex++;
         if (info.index === info.count) break;
       }
@@ -878,7 +878,12 @@ function setupGridInteraction(): void {
     if (currentDrag.kind === 'select') {
       updateSelectDrag(currentDrag, event);   // the release position is authoritative for drags
       if (!currentDrag.moved) {
-        if (currentDrag.inside) cycleSelection(currentDrag.partName);
+        // a click on a note of a larger selection selects just that note; on the selected note itself it steps through the voices
+        const current = selections[currentLayer][currentDrag.partName];
+        const base = current ? (current.base ?? current) : null;
+        const clickedWholeSelection = !!base && !!currentDrag.anchorBase &&
+          Math.abs(base.start - currentDrag.anchorBase.start) < 1e-6 && Math.abs(base.end - currentDrag.anchorBase.end) < 1e-6;
+        if (currentDrag.inside && (clickedWholeSelection || !currentDrag.anchorRange)) cycleSelection(currentDrag.partName);
         else if (currentDrag.anchorRange) setSelection(currentDrag.partName, currentDrag.anchorRange);
       }
       return;
@@ -895,7 +900,12 @@ function setupGridInteraction(): void {
     const sel = selections[currentLayer][currentDrag.partName];
     const targets = staff ? selectionTargets(staff, sel) : [];
     const store = targets.length === 1 ? targets[0] : null;
-    if (store && prev && changed && resizeNote(store, currentDrag.origStart, currentDrag.origEnd, prev.start, prev.end)) {
+    // the right edge follows Insert / Overwrite / Polyphony like any duration edit; the left edge always overwrites
+    const rightEdgeOnly = !!prev && currentDrag.side === 'right' && Math.abs(prev.start - currentDrag.origStart) < 1e-9;
+    const modeResult = store && prev && changed && rightEdgeOnly ? resizeNoteEnd(prev.end, currentDrag.partName) : null;
+    if (modeResult !== null) {
+      renderGridOverlays(Object.values(getActiveStaves()));
+    } else if (store && prev && changed && resizeNote(store, currentDrag.origStart, currentDrag.origEnd, prev.start, prev.end)) {
       selections[currentLayer][currentDrag.partName] = {
         start: prev.start, end: prev.end, voice: sel ? sel.voice : undefined, base: { start: prev.start, end: prev.end },
       };

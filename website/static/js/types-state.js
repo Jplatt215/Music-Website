@@ -1,7 +1,7 @@
 "use strict";
 const globalMemory = [];
 let globalMemoryIndex = -1;
-const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Articulation, Formatter, Tuplet } = Vex.Flow;
+const { Renderer, Stave, StaveNote, StaveTie, Dot, Voice: VFVoice, Accidental, Articulation, Formatter, Tuplet, GraceNote: VFGraceNote, GraceNoteGroup, Curve } = Vex.Flow;
 // Notes carry their own stave when drawn, so VexFlow decides collisions per staff (see customStaveNoteFormat)
 const STAVENOTE_FORMAT_VEXFLOW = StaveNote.format;
 const containers = {};
@@ -102,6 +102,8 @@ class Staff {
         this.extraVoices = []; // Down 1, Up 2, Down 2 (only the ones that have notes, in that order)
         this.dynamics = []; // pp, f, crescendo ... drawn under the staff
         this.techniques = []; // pizz., con sord. ... drawn above the staff
+        this.slurs = []; // drawn between the notes they cover
+        this.glissandos = []; // drawn between a note and the next
         this.name = name;
         this.pitchRange = pitchRange;
         this.rhythmRange = rhythmRange;
@@ -137,6 +139,8 @@ function resetStaffToDefaults(staff, rhythmRange) {
     staff.extraVoices = [];
     staff.dynamics = [];
     staff.techniques = [];
+    staff.slurs = [];
+    staff.glissandos = [];
     resetStaff(staff);
 }
 class UnprocessedNote {
@@ -148,16 +152,36 @@ class UnprocessedNote {
         this.dotted = dotted;
         this.isRest = this.noteName[0] === "Rest";
         this.tupletInfo = null;
+        this.innerTuplets = [];
         this.tiedToNext = tiedToNext;
         this.articulations = [];
+        this.graceNotes = [];
     }
     get octave() { return this.octaves[0]; }
     toStaveNote() {
-        return createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration, this.articulations);
+        const note = createNote(this.noteName, this.octaves, this.dotted ? this.duration + "d" : this.duration, this.articulations);
+        note._graces = this.graceNotes; // drawn by drawAllStaves, which knows the clef and key
+        return note;
     }
     setTuplet(id, totalTupletDuration, ratio, count, index) {
         this.tupletInfo = { id, totalTupletDuration, ratio, count, index };
     }
+}
+// Every tuplet a note is in, outermost first
+function tupletLevels(note) {
+    return note.tupletInfo ? [note.tupletInfo, ...note.innerTuplets] : [];
+}
+// How long a note lasts: its written value, squeezed by every tuplet it is in (not rounded, so thirds add up exactly)
+function getRealDuration(note) {
+    let duration = getNoteDuration(note);
+    for (const level of tupletLevels(note))
+        duration = duration * level.ratio[1] / level.ratio[0];
+    return duration;
+}
+// Puts `target` in the same tuplets as `source`
+function copyTuplets(source, target) {
+    target.tupletInfo = source.tupletInfo ? { ...source.tupletInfo, ratio: [...source.tupletInfo.ratio] } : null;
+    target.innerTuplets = source.innerTuplets.map(level => ({ ...level, ratio: [...level.ratio] }));
 }
 const staff1 = new Staff("staff1", ["C4", "C6"]);
 const staff2 = new Staff("staff2", ["A3", "F5"]);

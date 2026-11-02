@@ -663,7 +663,7 @@ document.addEventListener('keydown', (event: KeyboardEvent) => {
     targetElement.tagName === 'SELECT' || targetElement.tagName === 'TEXTAREA' || targetElement.isContentEditable;
   if (typing) return;
   // Esc clears the selection; with nothing selected it selects every track from start to end
-  if (staves.some(staffName => getSelection(staffName))) {
+  if (currentTab !== 'create' || staves.some(staffName => getSelection(staffName))) {
     for (const staffName of staves) clearSelection(staffName);
   } else {
     const whole: Record<string, SelectionRange> = {};
